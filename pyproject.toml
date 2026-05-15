@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fair-clustering-at-scale"
+version = "0.1.0"
+description = "Fast and effective algorithms for fair clustering at scale"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "numpy>=2.0,<3.0",
+    "pandas>=2.0,<4.0",
+    "matplotlib>=3.8,<4.0",
+    "scikit-learn>=1.5,<2.0",
+    "faiss-cpu>=1.10,<1.14",
+    "ucimlrepo>=0.0.7",
+    "tqdm>=4.66,<5.0",
+    "ortools>=9.10,<10.0",
+    "gurobipy==12.0.3",
+    "hexaly==14.0.20251212",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fair_clustering*"]
+
+[[tool.uv.index]]
+name = "hexaly"
+url = "https://pip.hexaly.com"
+explicit = true
+
+[tool.uv.sources]
+hexaly = { index = "hexaly" }

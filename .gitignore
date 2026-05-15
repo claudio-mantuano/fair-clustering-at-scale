@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+.ruff_cache/
+.venv/
+.vscode/
+.idea/
+results/
+data/*
+!data/synthetic_a.csv
+!data/synthetic_b.csv

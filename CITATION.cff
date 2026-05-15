@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the corresponding paper."
+title: fair-clustering-at-scale
+authors:
+  - given-names: Claudio
+    family-names: Mantuano
+    affiliation: University of Bern
+    orcid: "https://orcid.org/0009-0002-4316-8607"
+    email: "claudio.mantuano@unibe.ch"
+  - given-names: Manuel
+    family-names: Kammermann
+    affiliation: University of Bern
+  - given-names: Philipp
+    family-names: Baumann
+    affiliation: University of Bern
+    orcid: "https://orcid.org/0000-0002-3286-4474"
+    email: "philipp.baumann@unibe.ch"
+repository-code: "https://github.com/claudio-mantuano/fair-clustering-at-scale"
+license: MIT
+
+preferred-citation:
+  type: article
+  title: Fast and effective algorithms for fair clustering at scale
+  authors:
+    - given-names: Claudio
+      family-names: Mantuano
+    - given-names: Manuel
+      family-names: Kammermann
+    - given-names: Philipp
+      family-names: Baumann
+  year: 2026
+  journal: "arXiv preprint arXiv:2605.13759"
+  doi: "10.48550/arXiv.2605.13759"
