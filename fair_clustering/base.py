@@ -3,129 +3,157 @@
 # Paper: https://arxiv.org/abs/2605.13759
 
 import time
-from dataclasses import dataclass, field
 
 import numpy as np
 from sklearn.cluster import kmeans_plusplus
 
+from fair_clustering.blp import BLPBasedHeuristic
+from fair_clustering.flow import FlowBasedHeuristic
+from fair_clustering.exact import ExactApproaches
 
-@dataclass
-class FairClustering:
+
+class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
     """
-    Base class for fair clustering algorithms.
+    Base class for fair k-means clustering.
 
     Parameters
     ----------
-    X : np.ndarray
-        Non-sensitive feature matrix, shape (n_objects, n_features).
-    sensitive_feature : np.ndarray
-        Protected group labels, shape (n_objects,).
-    tolerance : float
-        Fairness tolerance parameter in [0, 1], or [0,1) for MS-FlowFC.
+    algorithm : str
+        Algorithm to run ("mpfc", "smpfc", "msflowfc", "miqcp", or "setvars").
     n_clusters : int
         Number of clusters to be identified.
-
+    tolerance : float
+        Fairness tolerance parameter in [0, 1], or [0, 1) for MS-FlowFC.
     target : str, default="dataset"
-        Use 'maximum' to compute the target balance relative to the maximum balance,
-        or 'dataset' to compute it relative to the dataset balance.
+        Use 'maximum' to compute the target balance relative to the maximum 
+        balance, or 'dataset' to compute it relative to the dataset balance.
     time_limit : float, default=3600
         Maximum runtime in seconds per instance.
     seed : int, default=42
         Random seed for reproducibility.
-    batch_X : np.ndarray | None, default=None
-        Non-sensitive feature matrix for S-MPFC, shape (n_batches, n_features).
-    batch_map : np.ndarray | None, default=None
-        Mapping from batches (representatives) to indices of the original dataset.
-    batch_weights : np.ndarray | None, default=None
-        Number of objects from each protected group in the batches.
 
     Attributes
     ----------
-    protected_groups : list[np.ndarray]
-        List of arrays containing indices of objects in each group sorted by size.
-    dataset_balance : float
-        Balance of the dataset.
-    max_balance : float
-        Maximum balance achievable given data and number of clusters.
-    target_balance : float
-        Target balance for the fair clustering algorithms.
-    clustering_labels : np.ndarray
+    labels_ : np.ndarray
         Cluster assignments with values in [0, n_clusters-1], shape (n_objects,).
-    clustering_centers : np.ndarray
+    cluster_centers_ : np.ndarray
         Coordinate array of cluster centers, shape (n_clusters, n_features).
-
-    n_iter : int
-        Number of iterations performed by the algorithm.
-    runtime : float
-        Running time of the algorithm in seconds.
-    algorithm : str
-        Name of the algorithm (only "mpfc" or "smpfc").
-    clustering_cost : float
+    cost_ : float
         Total within-cluster squared Euclidean distance.
-    clustering_balance : float | None
+    balance_ : float | None
         Minimum balance across all clusters.
-    cluster_balances : list[float]
+    cluster_balances_ : list[float]
         List of balance values for each cluster.
-    cluster_sizes : list[int]
+    cluster_sizes_ : list[int]
         Number of objects in each cluster.
-    violation : float | None
+    n_iter_ : int
+        Number of iterations performed by the algorithm.
+    runtime_ : float
+        Running time of the algorithm in seconds.
+    violation_ : float | None
         Percentage violation of target balance (fairness constraint violation).
-    excess : float | None
+    excess_ : float | None
         Percentage excess with respect to target balance.
-    status : int | None
+    status_ : int | None
         Status code returned by the solver.
-    mipgap : float | None
+    mipgap_ : float | None
         MIP Gap returned by the solver.
+    protected_groups_ : list[np.ndarray]
+        List of arrays containing indices of objects in each group sorted by size.
+    dataset_balance_ : float
+        Balance of the dataset.
+    max_balance_ : float
+        Maximum balance achievable given data and number of clusters.
+    target_balance_ : float
+        Target balance for the fair clustering algorithms.
     """
 
-    # Parameters (required)
-    X: np.ndarray
-    sensitive_feature: np.ndarray
-    tolerance: float
-    n_clusters: int
+    _SUPPORTED_ALGORITHMS = ("mpfc", "smpfc", "msflowfc", "miqcp", "setvars")
 
-    # Parameters (optional)
-    target: str = "dataset"
-    time_limit: float = 3600
-    seed: int = 42
-    batch_X: np.ndarray | None = None
-    batch_map: np.ndarray | None = None
-    batch_weights: np.ndarray | None = None
+    def __init__(
+        self,
+        algorithm: str,
+        n_clusters: int,
+        tolerance: float,
+        target: str = "dataset",
+        time_limit: float = 3600,
+        seed: int = 42,
+    ):
+        if algorithm not in self._SUPPORTED_ALGORITHMS:
+            raise ValueError(
+                f"Unsupported algorithm '{algorithm}'. "
+                f"Choose from {self._SUPPORTED_ALGORITHMS}."
+            )
+        self.algorithm = algorithm
+        self.n_clusters = n_clusters
+        self.tolerance = tolerance
+        self.target = target
+        self.time_limit = time_limit
+        self.seed = seed
 
-    # Attributes (computed/initialized in __post_init__)
-    protected_groups: list[np.ndarray] = field(init=False)
-    dataset_balance: float = field(init=False)
-    max_balance: float = field(init=False)
-    target_balance: float = field(init=False)
-    clustering_labels: np.ndarray = field(init=False)
-    clustering_centers: np.ndarray = field(init=False)
+    def fit(
+        self,
+        X: np.ndarray,
+        sensitive_feature: np.ndarray,
+        batch_X: np.ndarray | None = None,
+        batch_map: np.ndarray | None = None,
+        batch_weights: np.ndarray | None = None,
+    ) -> "FairClustering":
+        """
+        Run the selected fair clustering algorithm on the given data.
 
-    # Attributes (populated by the algorithms)
-    n_iter: int = 0
-    runtime: float = 0.0
-    algorithm: str | None = None
-    clustering_cost: float = float("inf")
-    clustering_balance: float | None = None
-    cluster_balances: list[float] = field(default_factory=list)
-    cluster_sizes: list[int] = field(default_factory=list)
-    violation: float | None = None
-    excess: float | None = None
-    status: int | None = None
-    mipgap: float | None = None
+        Parameters
+        ----------
+        X : np.ndarray
+            Non-sensitive feature matrix, shape (n_objects, n_features).
+        sensitive_feature : np.ndarray
+            Protected group labels, shape (n_objects,).
+        batch_X : np.ndarray | None, default=None
+            Non-sensitive feature matrix for S-MPFC, shape (n_batches, n_features).
+        batch_map : np.ndarray | None, default=None
+            Mapping from batches (representatives) to indices of the original dataset.
+        batch_weights : np.ndarray | None, default=None
+            Number of objects from each protected group in the batches.
 
-    def __post_init__(self):
-        """Initialize class attributes and compute target balance."""
+        Returns
+        -------
+        self : FairClustering
+            Fitted instance with populated result attributes.
+        """
+        self.X = X
+        self.sensitive_feature = sensitive_feature
+        self.batch_X = batch_X
+        self.batch_map = batch_map
+        self.batch_weights = batch_weights
+
+        self._reset_results()
         self._initialize_attributes()
         self._compute_dataset_balance()
         self._compute_max_balance()
         self._compute_target_balance()
 
+        getattr(self, f"_{self.algorithm}")()
+        return self
+
+    def _reset_results(self) -> None:
+        """Reset the result attributes populated by the algorithms."""
+        self.n_iter_ = 0
+        self.runtime_ = 0.0
+        self.cost_ = float("inf")
+        self.balance_ = None
+        self.cluster_balances_ = []
+        self.cluster_sizes_ = []
+        self.violation_ = None
+        self.excess_ = None
+        self.status_ = None
+        self.mipgap_ = None
+
     def _initialize_attributes(self) -> None:
         """Initialize clustering labels, centers, and protected group indices."""
-        self.clustering_labels = np.full(
+        self.labels_ = np.full(
             (self.X.shape[0],), -1, dtype=int
         )
-        self.clustering_centers = np.full(
+        self.cluster_centers_ = np.full(
             (self.n_clusters, self.X.shape[1]), -1.0, dtype=float
         )
         group_labels = np.unique(self.sensitive_feature)
@@ -136,29 +164,29 @@ class FairClustering:
         sorted_groups = sorted(
             group_labels, key=lambda g: group_size[g], reverse=True
         )
-        self.protected_groups = [
+        self.protected_groups_ = [
             np.flatnonzero(self.sensitive_feature == g) for g in sorted_groups
         ]
 
     def _compute_dataset_balance(self) -> None:
         """Compute dataset balance for the specified sensitive feature."""
         group_counts = np.bincount(self.sensitive_feature)
-        self.dataset_balance = group_counts.min() / group_counts.max()
+        self.dataset_balance_ = group_counts.min() / group_counts.max()
 
     def _compute_max_balance(self) -> None:
         """Compute the maximum balance achievable given data and number of clusters."""
-        n_smallest_group = self.protected_groups[-1].shape[0]
-        n_largest_group = self.protected_groups[0].shape[0]
-        self.max_balance = np.floor(
+        n_smallest_group = self.protected_groups_[-1].shape[0]
+        n_largest_group = self.protected_groups_[0].shape[0]
+        self.max_balance_ = np.floor(
             n_smallest_group / self.n_clusters
         ) / np.ceil(n_largest_group / self.n_clusters)
 
     def _compute_target_balance(self) -> None:
         """Compute the target balance based on the tolerance parameter."""
         if self.target == "maximum":
-            self.target_balance = (1 - self.tolerance) * self.max_balance
+            self.target_balance_ = (1 - self.tolerance) * self.max_balance_
         elif self.target == "dataset":
-            self.target_balance = (1 - self.tolerance) * self.dataset_balance
+            self.target_balance_ = (1 - self.tolerance) * self.dataset_balance_
         else:
             raise ValueError(
                 f"Invalid target '{self.target}'. Use 'maximum' or 'dataset'."
@@ -166,27 +194,27 @@ class FairClustering:
 
     def _extract_results(self) -> None:
         """Compute and extract all result metrics."""
-        self.clustering_centers, _ = self._update_centers(
-            self.X, self.clustering_labels, self.n_clusters
+        self.cluster_centers_, _ = self._update_centers(
+            self.X, self.labels_, self.n_clusters
         )
-        self.clustering_cost = self._get_cost(
-            self.X, self.clustering_centers, self.clustering_labels
+        self.cost_ = self._get_cost(
+            self.X, self.cluster_centers_, self.labels_
         )
-        self.clustering_balance, self.cluster_balances = (
+        self.balance_, self.cluster_balances_ = (
             self._get_clustering_balance(
-                self.sensitive_feature, self.clustering_labels
+                self.sensitive_feature, self.labels_
             )
         )
-        self.cluster_sizes = self._get_cluster_sizes(self.clustering_labels)
+        self.cluster_sizes_ = self._get_cluster_sizes(self.labels_)
         # Percentage gap between clustering balance and target balance
         bal_gap = (
-            (self.target_balance - self.clustering_balance)
-            / self.target_balance
+            (self.target_balance_ - self.balance_)
+            / self.target_balance_
         ) * 100
         # How much below target balance (0 if higher or equal)
-        self.violation = max(bal_gap, 0)
+        self.violation_ = max(bal_gap, 0)
         # How much above target balance (0 if below)
-        self.excess = max(-bal_gap, 0)
+        self.excess_ = max(-bal_gap, 0)
 
     @staticmethod
     def _initialize_centers_kmeans_pp(
@@ -233,7 +261,7 @@ class FairClustering:
         Returns
         -------
         distance_matrix : np.ndarray
-            Array where element [i, j] contains the squared Euclidean distance between 
+            Array where element [i, j] contains the squared Euclidean distance between
             object i and cluster center j, shape (n_objects, n_centers).
         """
         squared_norm_objects = np.sum(X**2, axis=1).reshape(-1, 1)
@@ -385,7 +413,7 @@ class FairClustering:
         clustering_balance = balances.min()
         cluster_balances = balances.tolist()
         return clustering_balance, cluster_balances
-    
+
     @staticmethod
     def _get_cluster_sizes(
         labels: np.ndarray

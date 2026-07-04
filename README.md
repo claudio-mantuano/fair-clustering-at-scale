@@ -48,32 +48,20 @@ or with `pip`:
 pip install git+https://github.com/claudio-mantuano/fair-clustering-at-scale.git --extra-index-url https://pip.hexaly.com
 ```
 
-All required dependencies are installed automatically. You can then import the corresponding class and invoke the desired method.
-
-<div align="center">
-
-| Algorithm  | Module                  | Class                | Method        |
-|:-----------|:------------------------|:---------------------|:--------------|
-| MPFC       | `fair_clustering.blp`   | `BLPBasedHeuristic`  | `.mpfc()`     |
-| MS-FlowFC  | `fair_clustering.flow`  | `FlowBasedHeuristic` | `.msflowfc()` |
-| S-MPFC     | `fair_clustering.blp`   | `BLPBasedHeuristic`  | `.smpfc()`    |
-| MIQCP      | `fair_clustering.exact` | `ExactApproaches`    | `.miqcp()`    |
-| SetVars    | `fair_clustering.exact` | `ExactApproaches`    | `.setvars()`  |
-
-</div>
+All required dependencies are installed automatically. You can then import the `FairClustering` class, select an algorithm through the `algorithm` parameter, and call `.fit()`.
 
 > [!IMPORTANT]
-> The methods `.mpfc()`, `.smpfc()`, `.miqcp()`, and `.setvars()` rely on commercial optimization solvers and require a valid license. Free academic licenses are available:
+> The algorithms `mpfc`, `smpfc`, `miqcp`, and `setvars` rely on commercial optimization solvers and require a valid license. Free academic licenses are available:
 > - [Gurobi Academic License](https://www.gurobi.com/academia/academic-program-and-licenses/) (Gurobi 12 is the default for this project)
 > - [Hexaly Academic License](https://www.hexaly.com/pricing) (Hexaly 14 is the default for this project)
 > 
 > If you already have a license, ensure that the versions of `gurobipy` and `hexaly` match the versions of the locally installed solvers. If they do not, upgrade or downgrade `gurobipy` and `hexaly` accordingly.
 
-An example for MS-FlowFC, which does not require any license, is provided below. The parameters accepted by the constructor are documented in the docstring of the `FairClustering` base class in `fair_clustering/base.py`, together with the full list of available attributes.
+An example for MS-FlowFC, which does not require any license, is provided below. The parameters accepted by the constructor and by `.fit()` are documented in the docstring of the `FairClustering` class in `fair_clustering/base.py`, together with the full list of available attributes.
 
 ```python
 import numpy as np
-from fair_clustering.flow import FlowBasedHeuristic
+from fair_clustering.base import FairClustering
 
 n_objects = 100_000
 n_features = 10 
@@ -83,31 +71,29 @@ np.random.seed(42)
 X = np.random.rand(n_objects, n_features)
 sensitive_feature = np.random.randint(0, n_groups, size=n_objects)
 
-fc = FlowBasedHeuristic(
-    X=X, sensitive_feature=sensitive_feature, tolerance=0.1, n_clusters=10
-)
-fc.msflowfc()
+fc = FairClustering(algorithm="msflowfc", n_clusters=10, tolerance=0.1)
+fc.fit(X, sensitive_feature)
 
-print(f"Cost: {fc.clustering_cost:.2f}")
-print(f"Balance: {fc.clustering_balance:.2f}")
-print(f"Runtime: {fc.runtime:.2f}s")
+print(f"Cost: {fc.cost_:.2f}")
+print(f"Balance: {fc.balance_:.2f}")
+print(f"Runtime: {fc.runtime_:.2f}s")
 ```
 
-S-MPFC additionally requires three batch-related parameters (`batch_X`, `batch_map`, `batch_weights`), which can be constructed using the `create_batches` helper function from `fair_clustering.preprocessing`:
+S-MPFC additionally requires three batch-related parameters (`batch_X`, `batch_map`, `batch_weights`), passed to `.fit()`, which can be constructed using the `create_batches` helper function from `fair_clustering.preprocessing`:
 
 ```python
-from fair_clustering.blp import BLPBasedHeuristic
+from fair_clustering.base import FairClustering
 from fair_clustering.preprocessing import create_batches
 
 batch_X, batch_map, batch_weights = create_batches(
     X, sensitive_feature, n_batches=500
 )
 
-fc = BLPBasedHeuristic(
-    ...,  # same parameters as the example above
+fc = FairClustering(algorithm="smpfc", n_clusters=10, tolerance=0.1)
+fc.fit(
+    X, sensitive_feature, 
     batch_X=batch_X, batch_map=batch_map, batch_weights=batch_weights
 )
-fc.smpfc()
 ```
 
 > [!NOTE]

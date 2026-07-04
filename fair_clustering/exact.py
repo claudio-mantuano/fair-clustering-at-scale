@@ -8,39 +8,38 @@ import numpy as np
 import gurobipy as gb
 import hexaly.optimizer as hx
 
-from fair_clustering.base import FairClustering
 
-
-class ExactApproaches(FairClustering):
+class ExactApproaches:
     """
-    Subclass for the implementation of exact approaches for fair k-means
-    clustering using an MIQCP formulation implemented in Gurobi or a 
-    Set-Variable-based (SetVars) formulation implemented in Hexaly.
+    Class implementing exact approaches for fair k-means clustering using
+    an MIQCP formulation implemented in Gurobi or a Set-Variable-based
+    (SetVars) formulation implemented in Hexaly.
 
-    Inherits all attributes from the base class FairClustering.
+    Provides the algorithms "miqcp" and "setvars" to the FairClustering class
+    defined in fair_clustering.base, which invokes them through `fit()`.
 
     Methods
     -------
-    miqcp()
+    _miqcp()
         Solve fair k-means clustering using MIQCP with Gurobi.
-    setvars()
+    _setvars()
         Solve fair k-means clustering using SetVars with Hexaly.
     """
 
-    def miqcp(self) -> None:
-        """Call this method to run the MIQCP approach."""
+    def _miqcp(self) -> None:
+        """Run the MIQCP approach."""
         model, labels = self._build_miqcp_model_gurobi()
         start_time = time.perf_counter()
         model.optimize()
-        self.runtime = time.perf_counter() - start_time
+        self.runtime_ = time.perf_counter() - start_time
         self._extract_results_gurobi(model, labels)
 
-    def setvars(self) -> None:
-        """Call this method to run the SetVars approach."""
+    def _setvars(self) -> None:
+        """Run the SetVars approach."""
         optimizer, clusters = self._build_setvars_model_hexaly()
         start_time = time.perf_counter()
         optimizer.solve()
-        self.runtime = time.perf_counter() - start_time
+        self.runtime_ = time.perf_counter() - start_time
         self._extract_results_hexaly(optimizer, clusters)
         self._extract_results()
         optimizer.delete()  # release Hexaly license token
@@ -61,7 +60,7 @@ class ExactApproaches(FairClustering):
         n_objects = range(self.X.shape[0])
         n_clusters = range(self.n_clusters)
         if miqcp_model.SolCount > 0:
-            self.clustering_labels = np.array(
+            self.labels_ = np.array(
                 [
                     j
                     for i in n_objects
@@ -70,17 +69,17 @@ class ExactApproaches(FairClustering):
                 ],
                 dtype=int,
             )
-            self.mipgap = miqcp_model.MIPGap
+            self.mipgap_ = miqcp_model.MIPGap
             self._extract_results()
         else:
-            self.clustering_cost = None
-            self.status = miqcp_model.Status
+            self.cost_ = None
+            self.status_ = miqcp_model.Status
 
     def _extract_results_hexaly(self, optimizer, clusters) -> None:
         """Extract results from solved Hexaly model."""
         for cluster_id, cluster in enumerate(clusters):
-            self.clustering_labels[cluster.value] = cluster_id
-        self.mipgap = optimizer.solution.get_objective_gap(pos=0)
+            self.labels_[cluster.value] = cluster_id
+        self.mipgap_ = optimizer.solution.get_objective_gap(pos=0)
 
     def _build_miqcp_model_gurobi(self) -> tuple[gb.Model, gb.tupledict]:
         """Construct MIQCP model for Gurobi."""
@@ -121,15 +120,15 @@ class ExactApproaches(FairClustering):
             )
         )
 
-        protected_groups_ = np.unique(self.sensitive_feature)
+        protected_group_labels = np.unique(self.sensitive_feature)
         for j in clusters:
-            for g in protected_groups_:
-                for g_ in protected_groups_:
+            for g in protected_group_labels:
+                for g_ in protected_group_labels:
                     if g != g_:
-                        counts_g = x.sum(self.protected_groups[g], j)
-                        counts_g_ = x.sum(self.protected_groups[g_], j)
+                        counts_g = x.sum(self.protected_groups_[g], j)
+                        counts_g_ = x.sum(self.protected_groups_[g_], j)
                         model.addConstr(
-                            counts_g >= self.target_balance * counts_g_
+                            counts_g >= self.target_balance_ * counts_g_
                         )
 
         model.setObjective(distances.sum(), gb.GRB.MINIMIZE)
@@ -149,9 +148,9 @@ class ExactApproaches(FairClustering):
         model.constraint(model.partition(cluster_set_vars))
         clustering_cost = []
         for cluster in cluster_set_vars:
-            protected_groups_ = np.unique(self.sensitive_feature)
-            for g in protected_groups_:
-                for g_ in protected_groups_:
+            protected_group_labels = np.unique(self.sensitive_feature)
+            for g in protected_group_labels:
+                for g_ in protected_group_labels:
                     if g != g_:
                         counts_g = model.sum(
                             cluster,
@@ -170,7 +169,7 @@ class ExactApproaches(FairClustering):
                             ),
                         )
                         model.constraint(
-                            counts_g >= self.target_balance * counts_g_
+                            counts_g >= self.target_balance_ * counts_g_
                         )
             size = model.count(cluster)
             centers = []

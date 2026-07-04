@@ -8,45 +8,42 @@ import time
 import gurobipy as gb
 import numpy as np
 
-from fair_clustering.base import FairClustering
-
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
-class BLPBasedHeuristic(FairClustering):
+class BLPBasedHeuristic:
     """
-    Subclass for the implementation of the heuristics relying on the Gurobi solver.
-    The algorithms alternate between binary linear programming-based assignment (BLP
-    with fixed centers) and cluster center update (with fixed assignments), according
-    to the k-means decomposition scheme.
+    Class implementing the heuristics relying on the Gurobi solver. The algorithms 
+    alternate between binary linear programming-based assignment (BLP with fixed 
+    centers) and cluster center update (with fixed assignments), according to the 
+    k-means decomposition scheme.
 
-    Inherits all attributes from the base class FairClustering.
+    Provides the algorithms "mpfc" and "smpfc" to the FairClustering class defined 
+    in fair_clustering.base, which invokes them through `fit()`.
 
     Methods
     -------
-    mpfc()
+    _mpfc()
         Solve the fair k-means clustering problem using the Mathematical
         Programming-based Fair Clustering algorithm (MPFC).
-    smpfc()
+    _smpfc()
         Solve the fair k-means clustering problem using the Scalable Mathematical
         Programming-based Fair Clustering algorithm (S-MPFC) with batches.
     """
 
-    def mpfc(self) -> None:
-        """Call this method to run the MPFC algorithm."""
-        self.algorithm = "mpfc"
-        self.clustering_labels, self.status = self._run_decomposition()
-        if self.status is None:
+    def _mpfc(self) -> None:
+        """Run the MPFC algorithm."""
+        self.labels_, self.status_ = self._run_decomposition()
+        if self.status_ is None:
             self._extract_results()
 
-    def smpfc(self) -> None:
-        """Call this method to run the S-MPFC algorithm."""
-        self.algorithm = "smpfc"
+    def _smpfc(self) -> None:
+        """Run the S-MPFC algorithm."""
         self._validate_batches()
-        batch_labels, self.status = self._run_decomposition()
-        if self.status is None:
+        batch_labels, self.status_ = self._run_decomposition()
+        if self.status_ is None:
             self._backmap(batch_labels=batch_labels)
             self._extract_results()
 
@@ -64,7 +61,7 @@ class BLPBasedHeuristic(FairClustering):
 
     def _backmap(self, batch_labels: np.ndarray) -> None:
         """Map batch assignments to original objects."""
-        self.clustering_labels = batch_labels[self.batch_map]
+        self.labels_ = batch_labels[self.batch_map]
 
     def _run_decomposition(
         self, max_iter: int = 100, min_improvement: float = 0.1
@@ -98,18 +95,18 @@ class BLPBasedHeuristic(FairClustering):
             X=X, n_centers=self.n_clusters, seed=self.seed
         )
 
-        while self.n_iter < max_iter:
+        while self.n_iter_ < max_iter:
             # Assignment step
             labels, assignment_runtime, status = self._assign_objects(
                 X=X,
                 centers=centers,
                 initial_labels=best_labels,
                 time_limit=self.time_limit,
-                iter=self.n_iter,
+                iter=self.n_iter_,
             )
             if status is not None:
-                self.clustering_cost = None
-                self.runtime = time.perf_counter() - start_time
+                self.cost_ = None
+                self.runtime_ = time.perf_counter() - start_time
                 return best_labels, status
 
             # Update step
@@ -133,8 +130,8 @@ class BLPBasedHeuristic(FairClustering):
                 elapsed_time > self.time_limit
             ):
                 if np.any(best_labels == -1):
-                    self.clustering_cost = None
-                    self.runtime = time.perf_counter() - start_time
+                    self.cost_ = None
+                    self.runtime_ = time.perf_counter() - start_time
                     return best_labels, 9
                 else:
                     break
@@ -144,15 +141,15 @@ class BLPBasedHeuristic(FairClustering):
 
             logger.info(
                 "iter=%-2d update[s]=%6.6f  assignment[s]=%6.4f  %s=%6.4f",
-                self.n_iter,
+                self.n_iter_,
                 update_runtime,
                 assignment_runtime,
                 "cost" if self.algorithm == "mpfc" else "cost(reduced)",
                 cost,
             )
-            self.n_iter += 1
+            self.n_iter_ += 1
 
-        self.runtime = time.perf_counter() - start_time
+        self.runtime_ = time.perf_counter() - start_time
         return best_labels, None
 
     def _assign_objects(
@@ -270,16 +267,16 @@ class BLPBasedHeuristic(FairClustering):
         model.addConstrs(x.sum(i, "*") == 1 for i in objects)
         model.addConstrs(x.sum("*", j) >= 1 for j in clusters)
 
-        protected_groups_ = np.unique(self.sensitive_feature)
+        protected_group_labels = np.unique(self.sensitive_feature)
         for j in clusters:
-            for g in protected_groups_:
-                for g_ in protected_groups_:
+            for g in protected_group_labels:
+                for g_ in protected_group_labels:
                     if g != g_:
                         if self.algorithm == "mpfc":
-                            count_g = x.sum(self.protected_groups[g], j)
-                            count_g_ = x.sum(self.protected_groups[g_], j)
+                            count_g = x.sum(self.protected_groups_[g], j)
+                            count_g_ = x.sum(self.protected_groups_[g_], j)
                             model.addConstr(
-                                count_g >= self.target_balance * count_g_
+                                count_g >= self.target_balance_ * count_g_
                             )
                         elif self.algorithm == "smpfc":
                             counts_g = gb.quicksum(
@@ -291,6 +288,6 @@ class BLPBasedHeuristic(FairClustering):
                                 for i in objects
                             )
                             model.addConstr(
-                                counts_g >= self.target_balance * counts_g_
+                                counts_g >= self.target_balance_ * counts_g_
                             )
         return model, x

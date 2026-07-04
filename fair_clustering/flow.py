@@ -9,33 +9,32 @@ import faiss
 import numpy as np
 from ortools.graph.python.min_cost_flow import SimpleMinCostFlow
 
-from fair_clustering.base import FairClustering
-
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
-class FlowBasedHeuristic(FairClustering):
+class FlowBasedHeuristic:
     """
-    Subclass for the implementation of the heuristic based on minimum-cost flow (MCF).
-    The algorithm alternates between a sequence of assignments through MCF (one for
-    each protected group of the sensitive feature) and cluster center updates (with
-    fixed assignments), according to the k-means decomposition scheme.
+    Class implementing the heuristic based on minimum-cost flow (MCF). The algorithm 
+    alternates between a sequence of assignments through MCF (one for each protected 
+    group of the sensitive feature) and cluster center updates (with fixed assignments), 
+    according to the k-means decomposition scheme.
 
-    Inherits all attributes from the base class FairClustering.
+    Provides the algorithm "msflowfc" to the FairClustering class defined in
+    fair_clustering.base, which invokes it through `fit()`.
 
     Methods
     -------
-    msflowfc()
-        Solve fair k-means clustering using the Multi-Stage Minimum-Cost Flow-based Fair
-        Clustering algorithm (MS-FlowFC).
+    _msflowfc()
+        Solve fair k-means clustering using the Multi-Stage Minimum-Cost Flow-based 
+        Fair Clustering algorithm (MS-FlowFC).
     """
 
-    def msflowfc(self) -> None:
-        """Call this method to run the MS-FlowFC algorithm."""
-        self.clustering_labels, self.status = self._run_decomposition_mcf()
-        if self.status is None:
+    def _msflowfc(self) -> None:
+        """Run the MS-FlowFC algorithm."""
+        self.labels_, self.status_ = self._run_decomposition_mcf()
+        if self.status_ is None:
             self._extract_results()
 
     def _run_decomposition_mcf(
@@ -68,14 +67,15 @@ class FlowBasedHeuristic(FairClustering):
         best_labels = np.full(self.X.shape[0], -1, dtype=np.int32)
         best_cost = float("inf")
         start_time = time.perf_counter()
+        seed = self.seed
 
         centers = self._initialize_centers_kmeans_pp(
-            X=self.X[self.protected_groups[0]],
+            X=self.X[self.protected_groups_[0]],
             n_centers=self.n_clusters,
-            seed=self.seed,
+            seed=seed,
         )
 
-        while self.n_iter < max_iter:
+        while self.n_iter_ < max_iter:
             empty_clusters = np.arange(self.n_clusters)
             labels = np.full(self.X.shape[0], -1, dtype=np.int32)
             assignment_start_time = time.perf_counter()
@@ -84,33 +84,33 @@ class FlowBasedHeuristic(FairClustering):
             while empty_clusters.shape[0] > 0:
                 # First protected group assignment using FAISS
                 first_stage_labels = self._assign_objects_faiss(
-                    objects=self.X[self.protected_groups[0]],
+                    objects=self.X[self.protected_groups_[0]],
                     centers=centers,
                 )
-                labels[self.protected_groups[0]] = first_stage_labels
+                labels[self.protected_groups_[0]] = first_stage_labels
 
                 # Check cluster emptiness
                 non_empty_clusters = np.unique(
-                    labels[self.protected_groups[0]]
+                    labels[self.protected_groups_[0]]
                 )
                 clusters = np.arange(self.n_clusters)
                 empty_clusters = np.setdiff1d(clusters, non_empty_clusters)
 
                 if empty_clusters.shape[0] > 0:
                     # Seed is updated to generate new cluster centers
-                    self.seed += 1
+                    seed += 1
                     # Center of empty clusters is re-initialized using k-means++
                     centers[empty_clusters] = (
                         self._initialize_centers_kmeans_pp(
-                            X=self.X[self.protected_groups[0]],
+                            X=self.X[self.protected_groups_[0]],
                             n_centers=empty_clusters.shape[0],
-                            seed=self.seed,
+                            seed=seed,
                         )
                     )
 
             # Assignment of objects from remaining protected groups
             idx_assigned_groups = [0]
-            for g in range(1, len(self.protected_groups)):
+            for g in range(1, len(self.protected_groups_)):
                 # Count objects from most represented group per cluster
                 counts = self._get_cluster_representation(
                     labels=labels, idx_assigned_groups=idx_assigned_groups
@@ -118,11 +118,11 @@ class FlowBasedHeuristic(FairClustering):
                 # MCF-based assignment
                 multi_stage_labels, _ = self._assign_objects_min_cost_flow(
                     current_group=g,
-                    objects=self.X[self.protected_groups[g]],
+                    objects=self.X[self.protected_groups_[g]],
                     centers=centers,
                     counts=counts,
                 )
-                labels[self.protected_groups[g]] = multi_stage_labels
+                labels[self.protected_groups_[g]] = multi_stage_labels
                 idx_assigned_groups.append(g)  # add last protected group
             assignment_runtime = time.perf_counter() - assignment_start_time
 
@@ -142,8 +142,8 @@ class FlowBasedHeuristic(FairClustering):
                 elapsed_time > self.time_limit
             ):
                 if np.any(best_labels == -1):
-                    self.clustering_cost = None
-                    self.runtime = time.perf_counter() - start_time
+                    self.cost_ = None
+                    self.runtime_ = time.perf_counter() - start_time
                     return best_labels, 9
                 else:
                     break
@@ -153,14 +153,14 @@ class FlowBasedHeuristic(FairClustering):
 
             logger.info(
                 "iter=%-2d update[s]=%6.6f  assignment[s]=%6.4f  cost=%6.4f",
-                self.n_iter,
+                self.n_iter_,
                 update_runtime,
                 assignment_runtime,
                 cost,
             )
-            self.n_iter += 1
+            self.n_iter_ += 1
 
-        self.runtime = time.perf_counter() - start_time
+        self.runtime_ = time.perf_counter() - start_time
         return best_labels, None
 
     def _get_cluster_representation(
@@ -190,7 +190,7 @@ class FlowBasedHeuristic(FairClustering):
 
         for cluster in clusters:
             protected_group_counts = np.array([
-                np.sum(labels[self.protected_groups[g]] == cluster)
+                np.sum(labels[self.protected_groups_[g]] == cluster)
                 for g in idx_assigned_groups
             ])
             representation["max"][cluster] = protected_group_counts.max()
@@ -279,9 +279,9 @@ class FlowBasedHeuristic(FairClustering):
         demand : np.ndarray
             Demand vector (negative values).
         """
-        n_objects_group = self.protected_groups[current_group].shape[0]
+        n_objects_group = self.protected_groups_[current_group].shape[0]
         # Raw demand (negative values)
-        demand = -np.ceil(self.target_balance * counts).astype(np.int32)
+        demand = -np.ceil(self.target_balance_ * counts).astype(np.int32)
         # Demand cannot be positive
         demand[demand > 0] = 0
         # Residual demand to pass to the sink
@@ -314,9 +314,9 @@ class FlowBasedHeuristic(FairClustering):
         capacity : np.ndarray
             Capacity vector (non-negative values).
         """
-        n_objects_group = self.protected_groups[current_group].shape[0]
+        n_objects_group = self.protected_groups_[current_group].shape[0]
         # Raw capacity (non-negative values)
-        capacity = np.floor((1 / self.target_balance) * counts).astype(
+        capacity = np.floor((1 / self.target_balance_) * counts).astype(
             np.int32
         )
         capacity += demand

@@ -14,9 +14,6 @@ from tqdm.auto import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from fair_clustering.base import FairClustering
-from fair_clustering.blp import BLPBasedHeuristic
-from fair_clustering.exact import ExactApproaches
-from fair_clustering.flow import FlowBasedHeuristic
 from fair_clustering.plotting import plot_clustering
 from fair_clustering.preprocessing import DataPreprocessor
 
@@ -152,9 +149,14 @@ class ExperimentRunner:
         clustering = self._create_instance(
             algorithm, k, tolerance, seed, time_limit
         )
-        clustering_method = getattr(clustering, clustering.algorithm)
-        clustering_method()
-        return clustering, time_limit - clustering.runtime
+        clustering.fit(
+            X=self.X,
+            sensitive_feature=self.sensitive_feature,
+            batch_X=self.batch_X,
+            batch_map=self.batch_map,
+            batch_weights=self.batch_weights,
+        )
+        return clustering, time_limit - clustering.runtime__
 
     def _create_instance(
         self,
@@ -164,28 +166,15 @@ class ExperimentRunner:
         seed: int,
         time_limit: float,
     ) -> FairClustering:
-        """Create an instance given data, algorithm, and parameters."""
-        args = {
-            "X": self.X,
-            "sensitive_feature": self.sensitive_feature,
-            "tolerance": tolerance,
-            "n_clusters": k,
-            "target": self.config.target,
-            "time_limit": time_limit,
-            "seed": seed,
-            "batch_X": self.batch_X,
-            "batch_map": self.batch_map,
-            "batch_weights": self.batch_weights,
-            "algorithm": algorithm,
-        }
-        if algorithm in {"miqcp", "setvars"}:
-            return ExactApproaches(**args)
-        elif algorithm in {"mpfc", "smpfc"}:
-            return BLPBasedHeuristic(**args)
-        elif algorithm in {"msflowfc"}:
-            return FlowBasedHeuristic(**args)
-        else:
-            raise ValueError(f"Unsupported algorithm: {algorithm}")
+        """Create a FairClustering instance given algorithm and parameters."""
+        return FairClustering(
+            algorithm=algorithm,
+            n_clusters=k,
+            tolerance=tolerance,
+            target=self.config.target,
+            time_limit=time_limit,
+            seed=seed,
+        )
 
     def _adjust_time_limit(self, algorithm: str) -> int:
         """Compute time limit adjusted for preprocessing overhead."""
@@ -210,7 +199,7 @@ class ExperimentRunner:
             self._append_result_row(result_row)
         elif algorithm in {"msflowfc"}:
             self._append_timeout_row(
-                algorithm, k, tolerance, seed, clustering.runtime
+                algorithm, k, tolerance, seed, clustering.runtime_
             )
 
     def _build_result_row(
@@ -232,21 +221,21 @@ class ExperimentRunner:
             self._get_preprocessing(),
             algorithm,
             seed,
-            clustering.n_iter,
+            clustering.n_iter_,
             k,
             tolerance,
-            clustering.status,
-            clustering.mipgap,
-            clustering.runtime,
-            clustering.clustering_cost,
+            clustering.status_,
+            clustering.mipgap_,
+            clustering.runtime_,
+            clustering.cost_,
             self.dataset_balance,
-            clustering.target_balance,
-            clustering.clustering_balance,
-            clustering.cluster_balances,
-            clustering.violation,
-            clustering.excess,
-            clustering.clustering_labels.tolist(),
-            clustering.clustering_centers.tolist(),
+            clustering.target_balance_,
+            clustering.balance_,
+            clustering.cluster_balances_,
+            clustering.violation_,
+            clustering.excess_,
+            clustering.labels_.tolist(),
+            clustering.cluster_centers_.tolist(),
         ]
 
     def _append_timeout_row(
