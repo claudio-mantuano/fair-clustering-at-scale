@@ -2,11 +2,15 @@
 # Copyright (c) 2026 Claudio Mantuano, University of Bern
 # Paper: https://arxiv.org/abs/2605.13759
 
+from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
-import gurobipy as gb
-import hexaly.optimizer as hx
+
+if TYPE_CHECKING:
+    import gurobipy as gb
 
 
 class ExactApproaches:
@@ -83,6 +87,14 @@ class ExactApproaches:
 
     def _build_miqcp_model_gurobi(self) -> tuple[gb.Model, gb.tupledict]:
         """Construct MIQCP model for Gurobi."""
+        try:
+            import gurobipy as gb
+        except ImportError as e:
+            raise ImportError(
+                "The 'miqcp' algorithm requires gurobipy, which is not installed. "
+                "Install the gurobipy version matching your local Gurobi installation."
+            ) from e
+        
         n, d = self.X.shape
         objects = range(n)
         clusters = range(self.n_clusters)
@@ -202,6 +214,8 @@ class ExactApproaches:
     def _setup_solver(self, solver: str, relative_gap: float = 0.0):
         """Initialize and configure optimization solver (Gurobi or Hexaly)."""
         if solver == "gurobi":
+            import gurobipy as gb
+
             model = gb.Model()
             # MIPFocus: 0=balanced, 1=feasibility, 2=optimality, 3=bound
             model.Params.MIPFocus = 0
@@ -210,6 +224,15 @@ class ExactApproaches:
             model.Params.TimeLimit = self.time_limit
             return model
         elif solver == "hexaly":
+            try:
+                import hexaly.optimizer as hx
+            except ImportError as e:
+                raise ImportError(
+                    "The 'setvars' algorithm requires hexaly, which is not installed. " 
+                    "Install the hexaly version matching your local Hexaly installation "
+                    "(https://www.hexaly.com/docs/last/installation/pythonsetup.html)."
+                ) from e
+            
             optimizer = hx.HexalyOptimizer()
             model = optimizer.model
             optimizer.param.verbosity = 1  # 0=quiet, 1=normal, 2=detailed

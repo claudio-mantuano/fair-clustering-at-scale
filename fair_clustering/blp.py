@@ -2,11 +2,17 @@
 # Copyright (c) 2026 Claudio Mantuano, University of Bern
 # Paper: https://arxiv.org/abs/2605.13759
 
+from __future__ import annotations
+
 import logging
 import time
+from typing import TYPE_CHECKING
 
-import gurobipy as gb
 import numpy as np
+import pyscipopt as scip
+
+if TYPE_CHECKING:
+    import gurobipy as gb
 
 
 logger = logging.getLogger(__name__)
@@ -15,10 +21,10 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 class BLPBasedHeuristic:
     """
-    Class implementing the heuristics relying on the Gurobi solver. The algorithms 
-    alternate between binary linear programming-based assignment (BLP with fixed 
-    centers) and cluster center update (with fixed assignments), according to the 
-    k-means decomposition scheme.
+    Class implementing the heuristics relying on a MIP solver (SCIP or Gurobi). The 
+    algorithms alternate between binary linear programming-based assignment (BLP 
+    with fixed centers) and cluster center update (with fixed assignments), according 
+    to the k-means decomposition scheme.
 
     Provides the algorithms "mpfc" and "smpfc" to the FairClustering class defined 
     in fair_clustering.base, which invokes them through `fit()`.
@@ -65,7 +71,7 @@ class BLPBasedHeuristic:
 
     def _run_decomposition(
         self, max_iter: int = 100, min_improvement: float = 0.1
-    ) -> tuple[np.ndarray | None, int | None]:
+    ) -> tuple[np.ndarray | None, int | str | None]:
         """
         Implement the k-means decomposition scheme (initialization, assignment, and
         center update) to cluster objects until a stopping criterion is met
@@ -83,8 +89,8 @@ class BLPBasedHeuristic:
         -------
         best_labels : np.ndarray
             Best assignments, or -1 array if no solution.
-        status : int | None
-            Gurobi status if failed, None otherwise.
+        status : int | str | None
+            Solver status if failed, None otherwise.
         """
         X = self.X if self.algorithm == "mpfc" else self.batch_X
         best_labels = np.full((X.shape[0],), -1, dtype=np.int32)
@@ -159,7 +165,7 @@ class BLPBasedHeuristic:
         initial_labels: np.ndarray,
         time_limit: float,
         iter: int,
-    ) -> tuple[np.ndarray | None, float, int | None]:
+    ) -> tuple[np.ndarray | None, float, int | str | None]:
         """
         Solve BLP with fixed centers to assign objects to clusters.
 
@@ -181,8 +187,9 @@ class BLPBasedHeuristic:
             Cluster assignments of shape (n_objects,) if solved, None otherwise.
         runtime : float
             Solver running time.
-        status : int | None
-            Gurobi status if failed, None if solved.
+        status : int | str | None
+            Solver status if failed (Gurobi code or SCIP status string),
+            None if solved.
         """
         objects = (
             range(self.X.shape[0])
@@ -195,7 +202,12 @@ class BLPBasedHeuristic:
             (i, j): distances[i, j] for i in objects for j in clusters
         }
 
-        model, x = self._setup_binary_linear_program(
+        setup_binary_linear_program = (
+            self._setup_blp_gurobi
+            if self.solver == "gurobi"
+            else self._setup_blp_scip
+        )
+        model, x = setup_binary_linear_program(
             distances=distances_dict,
             initial_labels=initial_labels,
             solver_time_limit=time_limit,
@@ -205,17 +217,28 @@ class BLPBasedHeuristic:
         model.optimize()
         runtime = time.perf_counter() - start_time
 
-        if model.SolCount > 0:
-            labels = np.fromiter(
-                (j for (i, j), var in x.items() if var.X > 0.5),
-                dtype=np.int32,
-                count=len(objects),
-            )
-            return labels, runtime, None
+        if self.solver == "gurobi":
+            if model.SolCount > 0:
+                labels = np.fromiter(
+                    (j for (i, j), var in x.items() if var.X > 0.5),
+                    dtype=np.int32,
+                    count=len(objects),
+                )
+                return labels, runtime, None
+            else:
+                return None, runtime, model.Status
         else:
-            return None, runtime, model.Status
+            if model.getNSols() > 0:
+                labels = np.fromiter(
+                    (j for (i, j), var in x.items() if model.getVal(var) > 0.5),
+                    dtype=np.int32,
+                    count=len(objects),
+                )
+                return labels, runtime, None
+            else:
+                return None, runtime, model.getStatus()
 
-    def _setup_binary_linear_program(
+    def _setup_blp_gurobi(
         self,
         distances: dict,
         initial_labels: np.ndarray,
@@ -224,7 +247,8 @@ class BLPBasedHeuristic:
         warm_start: bool = False,
     ) -> tuple[gb.Model, gb.tupledict]:
         """
-        Build the BLP model for the assignment of objects to cluster centers.
+        Build the BLP model for the assignment of objects to cluster centers
+        using Gurobi.
 
         Parameters
         ----------
@@ -244,6 +268,14 @@ class BLPBasedHeuristic:
         x : gb.tupledict
             Cluster assignment variables.
         """
+        try:
+            import gurobipy as gb
+        except ImportError as e:
+            raise ImportError(
+                "solver='gurobi' requires gurobipy, which is not installed. "
+                "Install the gurobipy version matching your local Gurobi "
+                "installation, or use solver='scip'."
+            ) from e
         X = self.X if self.algorithm == "mpfc" else self.batch_X
         objects = range(X.shape[0])
         clusters = range(self.n_clusters)
@@ -288,6 +320,96 @@ class BLPBasedHeuristic:
                                 for i in objects
                             )
                             model.addConstr(
+                                counts_g >= self.target_balance_ * counts_g_
+                            )
+        return model, x
+
+    def _setup_blp_scip(
+        self,
+        distances: dict,
+        initial_labels: np.ndarray,
+        solver_time_limit: float,
+        iter: int,
+        warm_start: bool = False,
+    ) -> tuple[scip.Model, dict]:
+        """
+        Build the BLP model for the assignment of objects to cluster centers
+        using SCIP.
+
+        Parameters
+        ----------
+        distances : dict
+            {(i,j): distance from object i to cluster center j}.
+        initial_labels : np.ndarray
+            Cluster assignments from previous iteration (used for warm start).
+        solver_time_limit : float
+            SCIP solver time limit.
+        warm_start : bool, default=False
+            Boolean parameter to trigger warm start.
+
+        Returns
+        -------
+        model : scip.Model
+            Built SCIP model.
+        x : dict
+            Cluster assignment variables.
+        """
+        X = self.X if self.algorithm == "mpfc" else self.batch_X
+        objects = range(X.shape[0])
+        clusters = range(self.n_clusters)
+
+        model = scip.Model()
+        model.hideOutput()
+        model.setEmphasis(scip.SCIP_PARAMEMPHASIS.FEASIBILITY)
+        model.setParam("limits/time", solver_time_limit)
+
+        # Variables
+        x = {
+            (i, j): model.addVar(vtype="B", obj=distances[i, j])
+            for (i, j) in distances
+        }
+        if warm_start and iter > 0:
+            if np.any(initial_labels == -1):
+                raise ValueError(
+                    "Warm start activated but labels are not fully initialized."
+                )
+            solution = model.createPartialSol()
+            for (i, j), var in x.items():
+                model.setSolVal(
+                    solution, var, 1 if initial_labels[i] == j else 0
+                )
+
+        # Constraints
+        for i in objects:
+            model.addCons(scip.quicksum(x[i, j] for j in clusters) == 1)
+        for j in clusters:
+            model.addCons(scip.quicksum(x[i, j] for i in objects) >= 1)
+
+        protected_group_labels = np.unique(self.sensitive_feature)
+        for j in clusters:
+            for g in protected_group_labels:
+                for g_ in protected_group_labels:
+                    if g != g_:
+                        if self.algorithm == "mpfc":
+                            count_g = scip.quicksum(
+                                x[i, j] for i in self.protected_groups_[g]
+                            )
+                            count_g_ = scip.quicksum(
+                                x[i, j] for i in self.protected_groups_[g_]
+                            )
+                            model.addCons(
+                                count_g >= self.target_balance_ * count_g_
+                            )
+                        elif self.algorithm == "smpfc":
+                            counts_g = scip.quicksum(
+                                self.batch_weights[i, g] * x[i, j]
+                                for i in objects
+                            )
+                            counts_g_ = scip.quicksum(
+                                self.batch_weights[i, g_] * x[i, j]
+                                for i in objects
+                            )
+                            model.addCons(
                                 counts_g >= self.target_balance_ * counts_g_
                             )
         return model, x

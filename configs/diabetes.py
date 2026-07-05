@@ -18,4 +18,5 @@ CONFIG = {
     "tolerances": [0.30, 0.10, 0.01],
     "global_time_limit": 3600,
     "plot": False,
+    "solver": "gurobi",
 }

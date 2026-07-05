@@ -31,6 +31,10 @@ class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         Maximum runtime in seconds per instance.
     seed : int, default=42
         Random seed for reproducibility.
+    solver : str, default="scip"
+        MIP solver used by MPFC and S-MPFC: "scip" (open source, no commercial 
+        license required) or "gurobi" (requires a commercial license). Ignored 
+        by the other algorithms.
 
     Attributes
     ----------
@@ -54,8 +58,8 @@ class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         Percentage violation of target balance (fairness constraint violation).
     excess_ : float | None
         Percentage excess with respect to target balance.
-    status_ : int | None
-        Status code returned by the solver.
+    status_ : int | str | None
+        Status returned by the solver (Gurobi code or SCIP status string).
     mipgap_ : float | None
         MIP Gap returned by the solver.
     protected_groups_ : list[np.ndarray]
@@ -69,6 +73,7 @@ class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
     """
 
     _SUPPORTED_ALGORITHMS = ("mpfc", "smpfc", "msflowfc", "miqcp", "setvars")
+    _SUPPORTED_SOLVERS = ("scip", "gurobi")
 
     def __init__(
         self,
@@ -78,11 +83,17 @@ class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         target: str = "dataset",
         time_limit: float = 3600,
         seed: int = 42,
+        solver: str = "scip",
     ):
         if algorithm not in self._SUPPORTED_ALGORITHMS:
             raise ValueError(
                 f"Unsupported algorithm '{algorithm}'. "
                 f"Choose from {self._SUPPORTED_ALGORITHMS}."
+            )
+        if solver not in self._SUPPORTED_SOLVERS:
+            raise ValueError(
+                f"Unsupported solver '{solver}'. "
+                f"Choose from {self._SUPPORTED_SOLVERS}."
             )
         self.algorithm = algorithm
         self.n_clusters = n_clusters
@@ -90,6 +101,7 @@ class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         self.target = target
         self.time_limit = time_limit
         self.seed = seed
+        self.solver = solver
 
     def fit(
         self,

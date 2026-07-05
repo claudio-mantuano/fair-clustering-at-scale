@@ -48,6 +48,7 @@ class ExperimentConfig:
     tolerances: list[float]
     global_time_limit: int
     plot: bool
+    solver: str
 
 
 class ExperimentRunner:
@@ -156,7 +157,7 @@ class ExperimentRunner:
             batch_map=self.batch_map,
             batch_weights=self.batch_weights,
         )
-        return clustering, time_limit - clustering.runtime__
+        return clustering, time_limit - clustering.runtime_
 
     def _create_instance(
         self,
@@ -174,6 +175,7 @@ class ExperimentRunner:
             target=self.config.target,
             time_limit=time_limit,
             seed=seed,
+            solver=self.config.solver,
         )
 
     def _adjust_time_limit(self, algorithm: str) -> int:

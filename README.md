@@ -22,15 +22,17 @@ A key feature of these algorithms is the precise control they offer over the **t
 
 <div align="center">
 
-| Algorithm  | Solver   | License-free* | Solution quality | Scalability | Recommended for                    |
-|:-----------|:---------|:-------------:|:----------------:|:-----------:|:-----------------------------------|
-| MPFC       | Gurobi   | No            | High             | Medium      | Highest solution quality (n ≤ 10⁵) |
-| MS-FlowFC  | OR-Tools | Yes           | High             | High        | High quality at scale (n ≤ 10⁶)    |
-| S-MPFC     | Gurobi   | No            | Medium           | Very high   | Maximum scalability (n > 10⁶)      |
+| Algorithm  | Solver¹        | Solution quality | Scalability | Recommended for²                   |
+|:-----------|:---------------|:----------------:|:-----------:|:-----------------------------------|
+| MPFC       | SCIP or Gurobi | High             | Medium      | Highest solution quality (n ≤ 10⁵) |
+| MS-FlowFC  | OR-Tools       | High             | High        | High quality at scale (n ≤ 10⁶)    |
+| S-MPFC     | SCIP or Gurobi | Medium           | Very high   | Maximum scalability (n > 10⁶)      |
 
 </div>
 
-*Gurobi offers [free academic licenses](https://www.gurobi.com/academia/academic-program-and-licenses/) but requires a paid license for commercial use. OR-Tools is distributed under the Apache 2.0 license and works out of the box after installation.
+¹ SCIP and OR-Tools are distributed under the Apache 2.0 license and work out of the box after installation. For better performance, MPFC and S-MPFC can also run on Gurobi, which is free for academic use but requires a paid license for commercial use (see [Quick start](#quick-start)).
+
+² n is the number of objects in the dataset.
 
 For a more detailed description of the algorithms, refer to the corresponding [paper](https://arxiv.org/abs/2605.13759).
 
@@ -45,19 +47,12 @@ uv add git+https://github.com/claudio-mantuano/fair-clustering-at-scale.git
 or with `pip`:
 
 ```bash
-pip install git+https://github.com/claudio-mantuano/fair-clustering-at-scale.git --extra-index-url https://pip.hexaly.com
+pip install git+https://github.com/claudio-mantuano/fair-clustering-at-scale.git
 ```
 
-All required dependencies are installed automatically. You can then import the `FairClustering` class, select an algorithm through the `algorithm` parameter, and call `.fit()`.
+All dependencies, including open-source solvers, are installed automatically. The heuristics `mpfc`, `msflowfc`, and `smpfc` work out of the box. The exact approaches `miqcp` and `setvars` require commercial solvers (see note below).
 
-> [!IMPORTANT]
-> The algorithms `mpfc`, `smpfc`, `miqcp`, and `setvars` rely on commercial optimization solvers and require a valid license. Free academic licenses are available:
-> - [Gurobi Academic License](https://www.gurobi.com/academia/academic-program-and-licenses/) (Gurobi 12 is the default for this project)
-> - [Hexaly Academic License](https://www.hexaly.com/pricing) (Hexaly 14 is the default for this project)
-> 
-> If you already have a license, ensure that the versions of `gurobipy` and `hexaly` match the versions of the locally installed solvers. If they do not, upgrade or downgrade `gurobipy` and `hexaly` accordingly.
-
-An example for MS-FlowFC, which does not require any license, is provided below. The parameters accepted by the constructor and by `.fit()` are documented in the docstring of the `FairClustering` class in `fair_clustering/base.py`, together with the full list of available attributes.
+You can import and instantiate the `FairClustering` class, select an algorithm through the `algorithm` parameter (`mpfc`, `msflowfc`, `smpfc`, `miqcp`, or `setvars`), and call `.fit()`. The parameters accepted by the constructor and by `.fit()` are documented in the `FairClustering` class docstring (see `fair_clustering/base.py`), along with the full list of available attributes. An example using MS-FlowFC is provided below.
 
 ```python
 import numpy as np
@@ -79,7 +74,7 @@ print(f"Balance: {fc.balance_:.2f}")
 print(f"Runtime: {fc.runtime_:.2f}s")
 ```
 
-S-MPFC additionally requires three batch-related parameters (`batch_X`, `batch_map`, `batch_weights`), passed to `.fit()`, which can be constructed using the `create_batches` helper function from `fair_clustering.preprocessing`:
+S-MPFC additionally requires three batch-related parameters (`batch_X`, `batch_map`, `batch_weights`), passed to `.fit()`, which can be constructed using the `create_batches` helper function from `fair_clustering.preprocessing`.
 
 ```python
 from fair_clustering.base import FairClustering
@@ -97,13 +92,32 @@ fc.fit(
 ```
 
 > [!NOTE]
+> For better performance, `mpfc` and `smpfc` (which use SCIP by default) can also run on Gurobi by passing `solver="gurobi"` to `FairClustering`. The exact approaches `miqcp` and `setvars` always require Gurobi and Hexaly, respectively.
+>
+> The commercial solver packages are not installed automatically, as their versions (indicated by `<version>` below) must match the Gurobi and Hexaly installations licensed on your machine. Install them with `uv`:
+>
+> ```bash
+> uv add gurobipy==<version>
+> uv add hexaly==<version> --index https://pip.hexaly.com
+> ```
+> 
+> or with `pip`:
+> 
+> ```bash
+> pip install gurobipy==<version>
+> pip install hexaly==<version> --extra-index-url https://pip.hexaly.com
+> ```
+>
+> Free academic licenses are available for [Gurobi](https://www.gurobi.com/academia/academic-program-and-licenses/) and [Hexaly](https://www.hexaly.com/pricing).
+
+> [!NOTE]
 > The implementation currently supports only datasets with a single sensitive feature.
 
 ## Run experiments
 
 ### Requirements
 
-To run the experimental pipeline, you need **uv** (to manage Python and dependencies), **Gurobi** (to run MPFC, S-MPFC, and MIQCP), **Hexaly** (to run SetVars), and optionally **Git** (to clone the repository).
+To run the experimental pipeline, you need **uv** (to manage Python and dependencies), **Gurobi** (to run MPFC, S-MPFC, and MIQCP with the default configs), **Hexaly** (to run SetVars), and optionally **Git** (to clone the repository).
 
 - **uv** 
 
@@ -123,7 +137,7 @@ To run the experimental pipeline, you need **uv** (to manage Python and dependen
 
 - **Gurobi and Hexaly** 
 
-    Gurobi and Hexaly are commercial mathematical optimization solvers. Both require a license, but free academic licenses are available for [Gurobi](https://www.gurobi.com/academia/academic-program-and-licenses/) and [Hexaly](https://www.hexaly.com/pricing). By default, this project uses Gurobi 12 and Hexaly 14.
+    Gurobi and Hexaly are commercial mathematical optimization solvers. Both require a license, but free academic licenses are available for [Gurobi](https://www.gurobi.com/academia/academic-program-and-licenses/) and [Hexaly](https://www.hexaly.com/pricing). The experiments described in the paper were run using Gurobi 12.0.3 and Hexaly 14.0.20251212.
 
 - **Git** 
 
@@ -159,8 +173,23 @@ To run the experimental pipeline, you need **uv** (to manage Python and dependen
 
     This command downloads Python, creates a virtual environment in `.venv/`, and installs all required dependencies.
 
-> [!WARNING]
-> The versions of `gurobipy` and `hexaly` must match the versions of the locally installed solvers. After running `uv sync`, you may need to upgrade or downgrade `gurobipy` and `hexaly` accordingly.
+3. **Install the commercial solver packages**
+
+    `gurobipy` and `hexaly` are not installed by `uv sync`, as their versions must match the Gurobi and Hexaly installations licensed on your machine. Install them from the repository root using `uv`:
+
+    ```bash
+    uv add gurobipy==<version>
+    uv add hexaly==<version> --index https://pip.hexaly.com
+    ```
+
+    or `pip`:
+
+    ```bash
+    pip install gurobipy==<version>
+    pip install hexaly==<version> --extra-index-url https://pip.hexaly.com
+    ```
+
+    Replace `<version>` with the versions matching your local Gurobi and Hexaly installations.
 
 ### Usage
 
@@ -178,6 +207,8 @@ You can use this project's experimental pipeline to reproduce the experiments de
 
     Pass a subset of the names to run only the corresponding experiments. The results are stored in the `results/` folder.
 
+    If you do not have commercial solver licenses, you can still run experiments using MPFC and S-MPFC on SCIP by setting `"solver": "scip"`, `"miqcp": False`, and `"setvars": False` in the configs. Note that results may deviate from those reported in the paper.
+
 > [!NOTE]
 > The results for `bank_5k` and `census1990` in the paper use target balance values specified directly, to facilitate comparison with benchmark methods. The configs in `configs/` instead derive the target balance from the tolerance parameter, therefore results may differ from those in the paper. 
 
@@ -192,30 +223,31 @@ You can use this project's experimental pipeline to reproduce the experiments de
 
     The parameters that must be defined in the config file are described in the following table.
 
-    | Parameter           | Type          | Description                                                           |
-    |:--------------------|:--------------|:----------------------------------------------------------------------|
-    | **Data**            |               |                                                                       |
-    | `dataset`           | `str`         | Dataset file name (excluding the file extension)                      |
-    | `sensitive_name`    | `str`         | Name of the sensitive feature                                         |
-    | `binary`            | `bool`        | `True` to keep only the two largest protected groups                  |
-    | `n_subsample`       | `int`         | Desired dataset size for stratified sampling                          |
-    | `n_batches`         | `int`         | Number of batches (representatives) for S-MPFC                        |
-    | `n_features`        | `int`         | Number of non-sensitive features to include                           |
-    | `normalize`         | `bool`        | `True` to min-max scale non-sensitive features                        |
-    | `standardize`       | `bool`        | `True` to standardize non-sensitive features                          |
-    | **Algorithms**      |               |                                                                       |
-    | `mpfc`              | `bool`        | `True` to run the MPFC heuristic (requires Gurobi)                    |
-    | `msflowfc`          | `bool`        | `True` to run the MS-FlowFC heuristic                                 |
-    | `smpfc`             | `bool`        | `True` to run the S-MPFC heuristic (requires Gurobi)                  |
-    | `miqcp`             | `bool`        | `True` to run the MIQCP exact approach (requires Gurobi)              |
-    | `setvars`           | `bool`        | `True` to run the SetVars exact approach (requires Hexaly)            |
-    | **Experiments**     |               |                                                                       |
-    | `n_clusters`        | `list[int]`   | Numbers of clusters to construct                                      |
-    | `n_seeds`           | `int`         | Number of runs with different random seeds (only for heuristics)      |
-    | `target`            | `str`         | Baseline for computing the target balance                             |
-    | `tolerances`        | `list[float]` | Tolerance values controlling the cost-fairness trade-off              |
-    | `global_time_limit` | `int`         | Time limit per instance (in seconds)                                  |
-    | `plot`              | `bool`        | `True` to generate plots for two-dimensional datasets                 |
+    | Parameter           | Type            | Description                                                                       |
+    |:--------------------|:----------------|:----------------------------------------------------------------------------------|
+    | **Data**            |                 |                                                                                   |
+    | `dataset`           | `str`           | Dataset file name (excluding the file extension)                                  |
+    | `sensitive_name`    | `str`           | Name of the sensitive feature                                                     |
+    | `binary`            | `bool`          | `True` to keep only the two largest protected groups                              |
+    | `n_subsample`       | `int`           | Desired dataset size for stratified sampling                                      |
+    | `n_batches`         | `int`           | Number of batches (representatives) for S-MPFC                                    |
+    | `n_features`        | `int`           | Number of non-sensitive features to include                                       |
+    | `normalize`         | `bool`          | `True` to min-max scale non-sensitive features                                    |
+    | `standardize`       | `bool`          | `True` to standardize non-sensitive features                                      |
+    | **Algorithms**      |                 |                                                                                   |
+    | `mpfc`              | `bool`          | `True` to run the MPFC heuristic                                                  |
+    | `msflowfc`          | `bool`          | `True` to run the MS-FlowFC heuristic                                             |
+    | `smpfc`             | `bool`          | `True` to run the S-MPFC heuristic                                                |
+    | `miqcp`             | `bool`          | `True` to run the MIQCP exact approach (requires Gurobi)                          |
+    | `setvars`           | `bool`          | `True` to run the SetVars exact approach (requires Hexaly)                        |
+    | **Experiments**     |                 |                                                                                   |
+    | `n_clusters`        | `list[int]`     | Numbers of clusters to construct                                                  |
+    | `n_seeds`           | `int`           | Number of runs with different random seeds (only for heuristics)                  |
+    | `target`            | `str`           | Baseline for computing the target balance                                         |
+    | `tolerances`        | `list[float]`   | Tolerance values controlling the cost-fairness trade-off                          |
+    | `global_time_limit` | `int`           | Time limit per instance (in seconds)                                              |
+    | `plot`              | `bool`          | `True` to generate plots for two-dimensional datasets                             |
+    | `solver`            | `str`           | MIP solver used by MPFC and S-MPFC, either `gurobi` (used in the paper) or `scip` |
 
 ## Reference
 
