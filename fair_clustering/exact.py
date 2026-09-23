@@ -96,6 +96,7 @@ class ExactApproaches:
             ) from e
         
         n, d = self.X.shape
+        k = self.n_clusters
         objects = range(n)
         clusters = range(self.n_clusters)
         features = range(d)
@@ -111,11 +112,7 @@ class ExactApproaches:
             ub={(j, f): v_max[f] for j in clusters for f in features},
         )
         x = model.addVars(objects, clusters, vtype=gb.GRB.BINARY)
-        distances = model.addVars(
-            objects,
-            clusters,
-            ub={(i, j): big_M[i] for i in objects for j in clusters},
-        )
+        distances = model.addVars(objects, clusters)
         y_lower = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
         y_upper = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
         model.update()
@@ -138,6 +135,16 @@ class ExactApproaches:
                 model.addConstr(y_lower[j] <= counts_g)
                 model.addConstr(y_upper[j] >= counts_g)
             model.addConstr(y_lower[j] >= self.target_balance_ * y_upper[j])
+
+        model.addConstrs(
+            x[i, j] == 0 for i in range(k - 1) for j in range(i + 1, k)
+        )
+        model.addConstrs(
+            gb.quicksum(x[i, j_] for j_ in range(j, min(i, k - 1) + 1))
+            <= gb.quicksum(x[i_, j - 1] for i_ in range(i))
+            for i in range(1, n)
+            for j in range(1, min(i, k - 1) + 1)
+        )
 
         model.setObjective(distances.sum(), gb.GRB.MINIMIZE)
         model.update()
