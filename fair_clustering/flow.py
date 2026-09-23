@@ -67,46 +67,44 @@ class FlowBasedHeuristic:
         best_labels = np.full(self.X.shape[0], -1, dtype=np.int32)
         best_cost = float("inf")
         start_time = time.perf_counter()
-        seed = self.seed
 
         centers = self._initialize_centers_kmeans_pp(
             X=self.X[self.protected_groups_[0]],
             n_centers=self.n_clusters,
-            seed=seed,
+            seed=self.seed,
         )
 
         while self.n_iter_ < max_iter:
-            empty_clusters = np.arange(self.n_clusters)
             labels = np.full(self.X.shape[0], -1, dtype=np.int32)
             assignment_start_time = time.perf_counter()
 
-            # Assignment of first protected group is repeated until no cluster is empty
-            while empty_clusters.shape[0] > 0:
-                # First protected group assignment using FAISS
-                first_stage_labels = self._assign_objects_faiss(
-                    objects=self.X[self.protected_groups_[0]],
-                    centers=centers,
-                )
-                labels[self.protected_groups_[0]] = first_stage_labels
+            # First protected group assignment using FAISS
+            first_stage_labels, first_stage_distances = self._assign_objects_faiss(
+                objects=self.X[self.protected_groups_[0]], centers=centers
+            )
+            cluster_sizes = np.bincount(first_stage_labels, minlength=self.n_clusters)
+            empty_clusters = list(np.flatnonzero(cluster_sizes == 0))
 
-                # Check cluster emptiness
-                non_empty_clusters = np.unique(
-                    labels[self.protected_groups_[0]]
-                )
-                clusters = np.arange(self.n_clusters)
-                empty_clusters = np.setdiff1d(clusters, non_empty_clusters)
-
-                if empty_clusters.shape[0] > 0:
-                    # Seed is updated to generate new cluster centers
-                    seed += 1
-                    # Center of empty clusters is re-initialized using k-means++
-                    centers[empty_clusters] = (
-                        self._initialize_centers_kmeans_pp(
-                            X=self.X[self.protected_groups_[0]],
-                            n_centers=empty_clusters.shape[0],
-                            seed=seed,
-                        )
-                    )
+            # Empty clusters are fixed with a greedy strategy
+            if empty_clusters:
+                # Find farthest objects from their assigned cluster center
+                farthest_objects = np.argpartition(
+                    -first_stage_distances, self.n_clusters - 1
+                )[:self.n_clusters]
+                farthest_objects = farthest_objects[
+                    np.argsort(-first_stage_distances[farthest_objects])
+                ]
+                for obj in farthest_objects:
+                    if not empty_clusters:
+                        break
+                    # The last object left in a cluster is not moved
+                    if cluster_sizes[first_stage_labels[obj]] > 1:
+                        cluster_sizes[first_stage_labels[obj]] -= 1
+                        empty_cluster = empty_clusters.pop()
+                        first_stage_labels[obj] = empty_cluster
+                        centers[empty_cluster] = self.X[self.protected_groups_[0][obj]]
+                        
+            labels[self.protected_groups_[0]] = first_stage_labels
 
             # Assignment of objects from remaining protected groups
             idx_assigned_groups = [0]
@@ -405,7 +403,7 @@ class FlowBasedHeuristic:
     @staticmethod
     def _assign_objects_faiss(
         objects: np.ndarray, centers: np.ndarray
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Assign objects to nearest cluster centers using FAISS L2 distance.
 
@@ -420,6 +418,8 @@ class FlowBasedHeuristic:
         -------
         labels : np.ndarray
             Cluster assignments.
+        distances : np.ndarray
+            Squared Euclidean distance from each object to its assigned center.
         """
         d = centers.shape[1]
         # FAISS requires float32
@@ -427,9 +427,10 @@ class FlowBasedHeuristic:
         centers = np.asarray(centers, dtype=np.float32)
         index = faiss.IndexFlatL2(d)
         index.add(centers)
-        _, faiss_labels = index.search(objects, 1)
+        faiss_distances, faiss_labels = index.search(objects, 1)
         labels = faiss_labels[:, 0].astype(int)
-        return labels
+        distances = faiss_distances[:, 0]
+        return labels, distances
 
     @staticmethod
     def _adjust_demand(
