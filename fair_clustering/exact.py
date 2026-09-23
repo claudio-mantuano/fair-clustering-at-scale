@@ -119,6 +119,8 @@ class ExactApproaches:
         )
         x = model.addVars(objects, clusters, vtype=gb.GRB.BINARY)
         distances = model.addVars(objects, clusters, ub=big_M)
+        y_lower = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
+        y_upper = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
         model.update()
 
         model.addConstrs(x.sum(i, "*") == 1 for i in objects)
@@ -135,13 +137,10 @@ class ExactApproaches:
         protected_group_labels = np.unique(self.sensitive_feature)
         for j in clusters:
             for g in protected_group_labels:
-                for g_ in protected_group_labels:
-                    if g != g_:
-                        counts_g = x.sum(self.protected_groups_[g], j)
-                        counts_g_ = x.sum(self.protected_groups_[g_], j)
-                        model.addConstr(
-                            counts_g >= self.target_balance_ * counts_g_
-                        )
+                counts_g = x.sum(self.protected_groups_[g], j)
+                model.addConstr(y_lower[j] <= counts_g)
+                model.addConstr(y_upper[j] >= counts_g)
+            model.addConstr(y_lower[j] >= self.target_balance_ * y_upper[j])
 
         model.setObjective(distances.sum(), gb.GRB.MINIMIZE)
         model.update()
@@ -161,28 +160,20 @@ class ExactApproaches:
         clustering_cost = []
         for cluster in cluster_set_vars:
             protected_group_labels = np.unique(self.sensitive_feature)
-            for g in protected_group_labels:
-                for g_ in protected_group_labels:
-                    if g != g_:
-                        counts_g = model.sum(
-                            cluster,
-                            model.lambda_function(
-                                lambda i: model.iif(
-                                    model.at(sensitive_feature, i) == g, 1, 0
-                                )
-                            ),
+            counts = [
+                model.sum(
+                    cluster,
+                    model.lambda_function(
+                        lambda i: model.iif(
+                            model.at(sensitive_feature, i) == g, 1, 0
                         )
-                        counts_g_ = model.sum(
-                            cluster,
-                            model.lambda_function(
-                                lambda i: model.iif(
-                                    model.at(sensitive_feature, i) == g_, 1, 0
-                                )
-                            ),
-                        )
-                        model.constraint(
-                            counts_g >= self.target_balance_ * counts_g_
-                        )
+                    ),
+                )
+                for g in protected_group_labels
+            ]
+            y_lower = model.min(counts)
+            y_upper = model.max(counts)
+            model.constraint(y_lower >= self.target_balance_ * y_upper)
             size = model.count(cluster)
             centers = []
             for f in features:

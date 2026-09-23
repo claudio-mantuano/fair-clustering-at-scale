@@ -7,12 +7,12 @@ import time
 import numpy as np
 from sklearn.cluster import kmeans_plusplus
 
-from fair_clustering.blp import BLPBasedHeuristic
+from fair_clustering.milp import MILPBasedHeuristic
 from fair_clustering.flow import FlowBasedHeuristic
 from fair_clustering.exact import ExactApproaches
 
 
-class FairClustering(BLPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
+class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
     """
     Base class for fair k-means clustering.
 

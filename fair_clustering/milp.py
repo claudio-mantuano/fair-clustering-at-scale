@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
-class BLPBasedHeuristic:
+class MILPBasedHeuristic:
     """
     Class implementing the heuristics relying on a MIP solver (SCIP or Gurobi). The 
-    algorithms alternate between binary linear programming-based assignment (BLP 
+    algorithms alternate between mixed-integer linear programming-based assignment (MILP 
     with fixed centers) and cluster center update (with fixed assignments), according 
     to the k-means decomposition scheme.
 
@@ -167,7 +167,7 @@ class BLPBasedHeuristic:
         iter: int,
     ) -> tuple[np.ndarray | None, float, int | str | None]:
         """
-        Solve BLP with fixed centers to assign objects to clusters.
+        Solve MILP with fixed centers to assign objects to clusters.
 
         Parameters
         ----------
@@ -202,12 +202,12 @@ class BLPBasedHeuristic:
             (i, j): distances[i, j] for i in objects for j in clusters
         }
 
-        setup_binary_linear_program = (
-            self._setup_blp_gurobi
+        setup_mixed_integer_linear_program = (
+            self._setup_milp_gurobi
             if self.solver == "gurobi"
-            else self._setup_blp_scip
+            else self._setup_milp_scip
         )
-        model, x = setup_binary_linear_program(
+        model, x = setup_mixed_integer_linear_program(
             distances=distances_dict,
             initial_labels=initial_labels,
             solver_time_limit=time_limit,
@@ -238,7 +238,7 @@ class BLPBasedHeuristic:
             else:
                 return None, runtime, model.getStatus()
 
-    def _setup_blp_gurobi(
+    def _setup_milp_gurobi(
         self,
         distances: dict,
         initial_labels: np.ndarray,
@@ -247,7 +247,7 @@ class BLPBasedHeuristic:
         warm_start: bool = False,
     ) -> tuple[gb.Model, gb.tupledict]:
         """
-        Build the BLP model for the assignment of objects to cluster centers
+        Build the MILP model for the assignment of objects to cluster centers
         using Gurobi.
 
         Parameters
@@ -287,6 +287,8 @@ class BLPBasedHeuristic:
 
         # Variables
         x = model.addVars(distances, obj=distances, vtype=gb.GRB.BINARY)
+        y_lower = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
+        y_upper = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
         if warm_start and iter > 0:
             if np.any(initial_labels == -1):
                 raise ValueError(
@@ -302,29 +304,18 @@ class BLPBasedHeuristic:
         protected_group_labels = np.unique(self.sensitive_feature)
         for j in clusters:
             for g in protected_group_labels:
-                for g_ in protected_group_labels:
-                    if g != g_:
-                        if self.algorithm == "mpfc":
-                            count_g = x.sum(self.protected_groups_[g], j)
-                            count_g_ = x.sum(self.protected_groups_[g_], j)
-                            model.addConstr(
-                                count_g >= self.target_balance_ * count_g_
-                            )
-                        elif self.algorithm == "smpfc":
-                            counts_g = gb.quicksum(
-                                self.batch_weights[i, g] * x[i, j]
-                                for i in objects
-                            )
-                            counts_g_ = gb.quicksum(
-                                self.batch_weights[i, g_] * x[i, j]
-                                for i in objects
-                            )
-                            model.addConstr(
-                                counts_g >= self.target_balance_ * counts_g_
-                            )
+                if self.algorithm == "mpfc":
+                    count_g = x.sum(self.protected_groups_[g], j)
+                elif self.algorithm == "smpfc":
+                    count_g = gb.quicksum(
+                        self.batch_weights[i, g] * x[i, j] for i in objects
+                    )
+                model.addConstr(y_lower[j] <= count_g)
+                model.addConstr(y_upper[j] >= count_g)
+            model.addConstr(y_lower[j] >= self.target_balance_ * y_upper[j])
         return model, x
 
-    def _setup_blp_scip(
+    def _setup_milp_scip(
         self,
         distances: dict,
         initial_labels: np.ndarray,
@@ -333,7 +324,7 @@ class BLPBasedHeuristic:
         warm_start: bool = False,
     ) -> tuple[scip.Model, dict]:
         """
-        Build the BLP model for the assignment of objects to cluster centers
+        Build the MILP model for the assignment of objects to cluster centers
         using SCIP.
 
         Parameters
@@ -368,6 +359,8 @@ class BLPBasedHeuristic:
             (i, j): model.addVar(vtype="B", obj=distances[i, j])
             for (i, j) in distances
         }
+        y_lower = {j: model.addVar(vtype="C", lb=0.0) for j in clusters}
+        y_upper = {j: model.addVar(vtype="C", lb=0.0) for j in clusters}
         if warm_start and iter > 0:
             if np.any(initial_labels == -1):
                 raise ValueError(
@@ -388,28 +381,15 @@ class BLPBasedHeuristic:
         protected_group_labels = np.unique(self.sensitive_feature)
         for j in clusters:
             for g in protected_group_labels:
-                for g_ in protected_group_labels:
-                    if g != g_:
-                        if self.algorithm == "mpfc":
-                            count_g = scip.quicksum(
-                                x[i, j] for i in self.protected_groups_[g]
-                            )
-                            count_g_ = scip.quicksum(
-                                x[i, j] for i in self.protected_groups_[g_]
-                            )
-                            model.addCons(
-                                count_g >= self.target_balance_ * count_g_
-                            )
-                        elif self.algorithm == "smpfc":
-                            counts_g = scip.quicksum(
-                                self.batch_weights[i, g] * x[i, j]
-                                for i in objects
-                            )
-                            counts_g_ = scip.quicksum(
-                                self.batch_weights[i, g_] * x[i, j]
-                                for i in objects
-                            )
-                            model.addCons(
-                                counts_g >= self.target_balance_ * counts_g_
-                            )
+                if self.algorithm == "mpfc":
+                    count_g = scip.quicksum(
+                        x[i, j] for i in self.protected_groups_[g]
+                    )
+                elif self.algorithm == "smpfc":
+                    count_g = scip.quicksum(
+                        self.batch_weights[i, g] * x[i, j] for i in objects
+                    )
+                model.addCons(y_lower[j] <= count_g)
+                model.addCons(y_upper[j] >= count_g)
+            model.addCons(y_lower[j] >= self.target_balance_ * y_upper[j])
         return model, x
