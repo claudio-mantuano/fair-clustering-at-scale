@@ -99,26 +99,23 @@ class ExactApproaches:
         objects = range(n)
         clusters = range(self.n_clusters)
         features = range(d)
-        distance_matrix = self._compute_distance_matrix(self.X, self.X)
-        big_M = np.max(distance_matrix)
+        v_min = self.X.min(axis=0)
+        v_max = self.X.max(axis=0)
+        big_M = self._compute_distance_matrix(self.X, self.X).max(axis=1)
         model = self._setup_solver(solver="gurobi")
 
         mu = model.addVars(
             clusters,
             features,
-            lb={
-                (j, f): np.min(self.X[:, f])
-                for j in clusters
-                for f in features
-            },
-            ub={
-                (j, f): np.max(self.X[:, f])
-                for j in clusters
-                for f in features
-            },
+            lb={(j, f): v_min[f] for j in clusters for f in features},
+            ub={(j, f): v_max[f] for j in clusters for f in features},
         )
         x = model.addVars(objects, clusters, vtype=gb.GRB.BINARY)
-        distances = model.addVars(objects, clusters, ub=big_M)
+        distances = model.addVars(
+            objects,
+            clusters,
+            ub={(i, j): big_M[i] for i in objects for j in clusters},
+        )
         y_lower = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
         y_upper = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
         model.update()
@@ -128,7 +125,7 @@ class ExactApproaches:
         model.addConstrs(
             (
                 gb.quicksum((self.X[i, f] - mu[j, f]) ** 2 for f in features)
-                <= distances[i, j] + big_M * (1 - x[i, j])
+                <= distances[i, j] + big_M[i] * (1 - x[i, j])
                 for i in objects
                 for j in clusters
             )
