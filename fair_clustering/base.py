@@ -60,8 +60,10 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         Percentage excess with respect to target balance.
     status_ : int | str | None
         Status returned by the solver (Gurobi code or SCIP status string).
-    mipgap_ : float | None
-        MIP Gap returned by the solver.
+    bound_ : float | None
+        Best lower bound (LB) on the cost returned by the solver.
+    gap_ : float | None
+        Relative gap (UB - LB) / UB between the cost and the best bound.
     protected_groups_ : list[np.ndarray]
         List of arrays containing indices of objects in each group sorted by size.
     dataset_balance_ : float
@@ -158,7 +160,8 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         self.violation_ = None
         self.excess_ = None
         self.status_ = None
-        self.mipgap_ = None
+        self.bound_ = None
+        self.gap_ = None
 
     def _initialize_attributes(self) -> None:
         """Initialize clustering labels, centers, and protected group indices."""
@@ -227,6 +230,9 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         self.violation_ = max(bal_gap, 0)
         # How much above target balance (0 if below)
         self.excess_ = max(-bal_gap, 0)
+        # Gap between cost (UB) and best bound (LB), only for exact approaches
+        if self.bound_ is not None:
+            self.gap_ = ((self.cost_ - self.bound_) / self.cost_) * 100
 
     @staticmethod
     def _initialize_centers_kmeans_pp(
