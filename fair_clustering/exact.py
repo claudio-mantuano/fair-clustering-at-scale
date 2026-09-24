@@ -73,7 +73,7 @@ class ExactApproaches:
                 ],
                 dtype=int,
             )
-            self.mipgap_ = miqcp_model.MIPGap
+            self.bound_ = miqcp_model.ObjBound
             self._extract_results()
         else:
             self.cost_ = None
@@ -83,7 +83,7 @@ class ExactApproaches:
         """Extract results from solved Hexaly model."""
         for cluster_id, cluster in enumerate(clusters):
             self.labels_[cluster.value] = cluster_id
-        self.mipgap_ = optimizer.solution.get_objective_gap(pos=0)
+        self.bound_ = optimizer.solution.get_objective_bound(0)
 
     def _build_miqcp_model_gurobi(self) -> tuple[gb.Model, gb.tupledict]:
         """Construct MIQCP model for Gurobi."""
@@ -155,67 +155,62 @@ class ExactApproaches:
         n_objects, n_features = self.X.shape
         clusters = range(self.n_clusters)
         features = range(n_features)
-        optimizer, model, relative_gap = self._setup_solver(solver="hexaly")
-        X = model.array(self.X)  # convert NumPy arrays to Hexaly arrays
-        sensitive_feature = model.array(self.sensitive_feature)
+        optimizer, model = self._setup_solver(solver="hexaly")
 
+        X = model.array(self.X)
+        protected_group_labels = np.unique(self.sensitive_feature)
+        group_indicators = [
+            model.array((self.sensitive_feature == g).astype(int))
+            for g in protected_group_labels
+        ]
+        # Create set variables
         cluster_set_vars = [model.set(n_objects) for _ in clusters]
+        # Impose uniqueness and completeness of assignment
         model.constraint(model.partition(cluster_set_vars))
-        clustering_cost = []
+
+        clustering_cost = model.sum()
         for cluster in cluster_set_vars:
-            protected_group_labels = np.unique(self.sensitive_feature)
-            counts = [
-                model.sum(
-                    cluster,
-                    model.lambda_function(
-                        lambda i: model.iif(
-                            model.at(sensitive_feature, i) == g, 1, 0
-                        )
-                    ),
-                )
-                for g in protected_group_labels
-            ]
-            y_lower = model.min(counts)
-            y_upper = model.max(counts)
-            model.constraint(y_lower >= self.target_balance_ * y_upper)
             size = model.count(cluster)
+            # Impose non-emptiness of clusters
+            model.constraint(size >= 1)
+            # Impose fairness
+            counts = [
+                model.sum(cluster, model.lambda_function(lambda i: model.at(a, i)))
+                for a in group_indicators
+            ]
+            model.constraint(
+                model.min(counts) >= self.target_balance_ * model.max(counts)
+            )
+            # Define cluster centers
             centers = []
             for f in features:
-                coordinate_lambda = model.lambda_function(
-                    lambda i: model.at(X, i, f)
+                coordinate_lambda = model.lambda_function(lambda i: model.at(X, i, f))
+                centers.append(
+                    model.iif(size == 0, 0, model.sum(cluster, coordinate_lambda) / size)
                 )
-                coordinate_f = model.iif(
-                    size == 0, 0, model.sum(cluster, coordinate_lambda) / size
-                )
-                centers.append(coordinate_f)
-
+            # Define clustering cost
             cluster_cost = model.sum()
             for f in features:
-                dimension_variance_lambda = model.lambda_function(
-                    lambda i: model.sum(
-                        model.pow(model.at(X, i, f) - centers[f], 2)
-                    )
+                deviation_lambda = model.lambda_function(
+                    lambda i: model.pow(model.at(X, i, f) - centers[f], 2)
                 )
-                dimension_cost = model.sum(cluster, dimension_variance_lambda)
-                cluster_cost.add_operand(dimension_cost)
-            clustering_cost.append(cluster_cost)
+                cluster_cost.add_operand(model.sum(cluster, deviation_lambda))
+            clustering_cost.add_operand(cluster_cost)
 
-        objective = model.sum(clustering_cost)
-        model.minimize(objective)
+        model.minimize(clustering_cost)
         model.close()
-        optimizer.param.set_objective_threshold(0, relative_gap)
         return optimizer, cluster_set_vars
 
-    def _setup_solver(self, solver: str, relative_gap: float = 0.0):
+    def _setup_solver(self, solver: str):
         """Initialize and configure optimization solver (Gurobi or Hexaly)."""
         if solver == "gurobi":
             import gurobipy as gb
 
             model = gb.Model()
-            # MIPFocus: 0=balanced, 1=feasibility, 2=optimality, 3=bound
-            model.Params.MIPFocus = 0
+            model.Params.Seed = 0
+            model.Params.MIPFocus = 3  # 0=balanced, 1=feasibility, 2=optimality, 3=bound
             model.Params.OutputFlag = 1  # 0=silent, 1=normal logging
-            model.Params.MIPGap = relative_gap  # 0.0 = exact optimum
+            model.Params.MIPGap = 1e-4
             model.Params.TimeLimit = self.time_limit
             return model
         elif solver == "hexaly":
@@ -230,10 +225,11 @@ class ExactApproaches:
             
             optimizer = hx.HexalyOptimizer()
             model = optimizer.model
+            optimizer.param.seed = 0
             optimizer.param.verbosity = 1  # 0=quiet, 1=normal, 2=detailed
+            optimizer.param.set_gap_limit(1e-4)
             optimizer.param.time_limit = self.time_limit
-            # Note: Hexaly API requires model to be closed before setting MIP Gap
-            return optimizer, model, relative_gap
+            return optimizer, model
         else:
             raise ValueError(
                 "Please select a supported solver ('gurobi', 'hexaly')."
