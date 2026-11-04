@@ -203,6 +203,7 @@ class ExperimentRunner:
             self._get_preprocessing(),
             algorithm,
             seed,
+            None,
             clustering.n_iter_,
             k,
             tolerance,
@@ -250,6 +251,7 @@ class ExperimentRunner:
             self._get_preprocessing(),
             algorithm,
             "average",
+            window_size,
             compute_avg("Iterations"),
             k,
             tolerance,
@@ -311,6 +313,7 @@ class ExperimentRunner:
         )
         row = {col: self.results[col][absolute_idx] for col in columns}
         row["Seed"] = str(row["Seed"]) + "_best"
+        row["Runs"] = window_size
 
         for column in ("Total time (s)", "External time (s)", "Python time (s)"):
             runtimes = self.results[column][-(window_size + 1) : -1]
@@ -398,6 +401,7 @@ class ExperimentRunner:
             "Preprocessing",
             "Algorithm",
             "Seed",
+            "Runs",
             "Iterations",
             "k",
             "Tolerance",
