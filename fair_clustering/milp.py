@@ -95,6 +95,7 @@ class MILPBasedHeuristic:
         X = self.X if self.algorithm == "mpfc" else self.batch_X
         best_labels = np.full((X.shape[0],), -1, dtype=np.int32)
         best_cost = float("inf")
+        self.external_runtime_ = 0.0
         start_time = time.perf_counter()
 
         centers = self._initialize_centers_kmeans_pp(
@@ -103,17 +104,23 @@ class MILPBasedHeuristic:
 
         while self.n_iter_ < max_iter:
             # Assignment step
+            remaining_time = max(
+                self.time_limit - (time.perf_counter() - start_time), 0
+            )
             labels, assignment_runtime, status = self._assign_objects(
                 X=X,
                 centers=centers,
                 initial_labels=best_labels,
-                time_limit=self.time_limit,
+                time_limit=remaining_time,
                 iter=self.n_iter_,
             )
+            self.external_runtime_ += assignment_runtime
             if status is not None:
-                self.cost_ = None
-                self.runtime_ = time.perf_counter() - start_time
-                return best_labels, status
+                if np.any(best_labels == -1):
+                    self.cost_ = None
+                    self.total_runtime_ = time.perf_counter() - start_time
+                    return best_labels, status
+                break
 
             # Update step
             if self.algorithm == "mpfc":
@@ -137,7 +144,7 @@ class MILPBasedHeuristic:
             ):
                 if np.any(best_labels == -1):
                     self.cost_ = None
-                    self.runtime_ = time.perf_counter() - start_time
+                    self.total_runtime_ = time.perf_counter() - start_time
                     return best_labels, 9
                 else:
                     break
@@ -155,7 +162,7 @@ class MILPBasedHeuristic:
             )
             self.n_iter_ += 1
 
-        self.runtime_ = time.perf_counter() - start_time
+        self.total_runtime_ = time.perf_counter() - start_time
         return best_labels, None
 
     def _assign_objects(
@@ -323,6 +330,8 @@ class MILPBasedHeuristic:
                 model.addConstr(
                     y_lower[m, j] >= self.target_balance_[m] * y_upper[m, j]
                 )
+        # Update here so that model construction is excluded from solver runtime
+        model.update()
         return model, x
 
     def _setup_milp_scip(

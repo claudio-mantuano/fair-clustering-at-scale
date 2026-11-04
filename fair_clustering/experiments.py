@@ -109,15 +109,15 @@ class ExperimentRunner:
                         algorithm, k, tolerance, seed, time_limit
                     )
                     local_counter += 1
-                    if time_limit < 0:
-                        self._handle_timeout(
-                            clustering, algorithm, k, tolerance, seed
-                        )
-                        break
                     result_row = self._build_result_row(
                         clustering, algorithm, k, tolerance, seed
                     )
                     self._append_result_row(result_row)
+                    if time_limit < 0:
+                        logger.warning(
+                            "The time limit has been exceeded. Terminating..."
+                        )
+                        break
 
                 if algorithm in {"mpfc", "msflowfc", "smpfc"}:
                     self._append_result_summary(
@@ -157,7 +157,7 @@ class ExperimentRunner:
             batch_map=self.batch_map,
             batch_weights=self.batch_weights,
         )
-        return clustering, time_limit - clustering.runtime_
+        return clustering, time_limit - clustering.total_runtime_
 
     def _create_instance(
         self,
@@ -184,26 +184,6 @@ class ExperimentRunner:
             return self.config.global_time_limit - self.batch_runtime
         return self.config.global_time_limit
 
-    def _handle_timeout(
-        self,
-        clustering: FairClustering,
-        algorithm: str,
-        k: int,
-        tolerance: float,
-        seed: int,
-    ) -> None:
-        """Handle experiment timeout based on the algorithm."""
-        logger.warning("The time limit has been exceeded. Terminating...")
-        if algorithm in {"mpfc", "smpfc", "miqcp", "setvars"}:
-            result_row = self._build_result_row(
-                clustering, algorithm, k, tolerance, seed
-            )
-            self._append_result_row(result_row)
-        elif algorithm in {"msflowfc"}:
-            self._append_timeout_row(
-                algorithm, k, tolerance, seed, clustering.runtime_
-            )
-
     def _build_result_row(
         self,
         clustering: FairClustering,
@@ -228,7 +208,9 @@ class ExperimentRunner:
             tolerance,
             clustering.status_,
             clustering.gap_,
-            clustering.runtime_,
+            clustering.total_runtime_,
+            clustering.external_runtime_,
+            clustering.python_runtime_,
             clustering.cost_,
             self.dataset_balance,
             clustering.target_balance_,
@@ -239,43 +221,6 @@ class ExperimentRunner:
             clustering.labels_.tolist(),
             clustering.cluster_centers_.tolist(),
         ]
-
-    def _append_timeout_row(
-        self,
-        algorithm: str,
-        k: int,
-        tolerance: float,
-        seed: int | None,
-        runtime: float,
-    ) -> None:
-        """Append a timeout row to the dictionary of results."""
-        row = [
-            self.config.dataset,
-            self.X.shape[0],
-            self.batch_X.shape[0] if algorithm == "smpfc" else None,
-            self.features,
-            self.config.sensitive_names,
-            self.protected_group_names,
-            self._get_preprocessing(),
-            algorithm,
-            seed,
-            None,
-            k,
-            tolerance,
-            "timeout",
-            None,
-            runtime,
-            None,
-            self.dataset_balance,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ]
-        self._append_result_row(row)
 
     def _append_result_summary(
         self, algorithm: str, k: int, tolerance: float, window_size: int
@@ -310,7 +255,9 @@ class ExperimentRunner:
             tolerance,
             None,
             compute_avg("Gap"),
-            compute_avg("Running time (s)"),
+            compute_avg("Total time (s)"),
+            compute_avg("External time (s)"),
+            compute_avg("Python time (s)"),
             compute_avg("Clustering cost"),
             self.dataset_balance,
             compute_avg("Target balance"),
@@ -365,13 +312,12 @@ class ExperimentRunner:
         row = {col: self.results[col][absolute_idx] for col in columns}
         row["Seed"] = str(row["Seed"]) + "_best"
 
-        runtimes = self.results["Running time (s)"][-(window_size + 1) : -1]
-        total_runtime = sum(t for t in runtimes if t is not None)
-        row["Running time (s)"] = (
-            total_runtime + self.batch_runtime
-            if algorithm == "smpfc"
-            else total_runtime
-        )
+        for column in ("Total time (s)", "External time (s)", "Python time (s)"):
+            runtimes = self.results[column][-(window_size + 1) : -1]
+            row[column] = sum(t for t in runtimes if t is not None)
+        if algorithm == "smpfc":
+            row["Total time (s)"] += self.batch_runtime
+            row["External time (s)"] += self.batch_runtime
         return row
 
     def _plot_clustering(
@@ -457,7 +403,9 @@ class ExperimentRunner:
             "Tolerance",
             "Status",
             "Gap",
-            "Running time (s)",
+            "Total time (s)",
+            "External time (s)",
+            "Python time (s)",
             "Clustering cost",
             "Dataset balance",
             "Target balance",

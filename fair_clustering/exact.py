@@ -35,7 +35,7 @@ class ExactApproaches:
         model, labels = self._build_miqcp_model_gurobi()
         start_time = time.perf_counter()
         model.optimize()
-        self.runtime_ = time.perf_counter() - start_time
+        self.total_runtime_ = time.perf_counter() - start_time
         self._extract_results_gurobi(model, labels)
 
     def _setvars(self) -> None:
@@ -43,7 +43,7 @@ class ExactApproaches:
         optimizer, clusters = self._build_setvars_model_hexaly()
         start_time = time.perf_counter()
         optimizer.solve()
-        self.runtime_ = time.perf_counter() - start_time
+        self.total_runtime_ = time.perf_counter() - start_time
         self._extract_results_hexaly(optimizer, clusters)
         optimizer.delete()  # release Hexaly license token
 

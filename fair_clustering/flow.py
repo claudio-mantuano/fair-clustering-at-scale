@@ -70,8 +70,8 @@ class FlowBasedHeuristic:
         """
         best_labels = np.full(self.X.shape[0], -1, dtype=np.int32)
         best_cost = float("inf")
+        self.external_runtime_ = 0.0
         start_time = time.perf_counter()
-        # Protected groups of the single sensitive feature
         protected_groups = self.protected_groups_[0]
 
         centers = self._initialize_centers_kmeans_pp(
@@ -85,9 +85,12 @@ class FlowBasedHeuristic:
             assignment_start_time = time.perf_counter()
 
             # First protected group assignment using FAISS
-            first_stage_labels, first_stage_distances = self._assign_objects_faiss(
-                objects=self.X[protected_groups[0]], centers=centers
+            first_stage_labels, first_stage_distances, faiss_runtime = (
+                self._assign_objects_faiss(
+                    objects=self.X[protected_groups[0]], centers=centers
+                )
             )
+            self.external_runtime_ += faiss_runtime
             cluster_sizes = np.bincount(first_stage_labels, minlength=self.n_clusters)
             empty_clusters = list(np.flatnonzero(cluster_sizes == 0))
 
@@ -120,12 +123,13 @@ class FlowBasedHeuristic:
                     labels=labels, idx_assigned_groups=idx_assigned_groups
                 )
                 # MCF-based assignment
-                multi_stage_labels, _ = self._assign_objects_min_cost_flow(
+                multi_stage_labels, mcf_runtime = self._assign_objects_min_cost_flow(
                     current_group=g,
                     objects=self.X[protected_groups[g]],
                     centers=centers,
                     counts=counts,
                 )
+                self.external_runtime_ += mcf_runtime
                 labels[protected_groups[g]] = multi_stage_labels
                 idx_assigned_groups.append(g)  # add last protected group
             assignment_runtime = time.perf_counter() - assignment_start_time
@@ -147,7 +151,7 @@ class FlowBasedHeuristic:
             ):
                 if np.any(best_labels == -1):
                     self.cost_ = None
-                    self.runtime_ = time.perf_counter() - start_time
+                    self.total_runtime_ = time.perf_counter() - start_time
                     return best_labels, 9
                 else:
                     break
@@ -164,7 +168,7 @@ class FlowBasedHeuristic:
             )
             self.n_iter_ += 1
 
-        self.runtime_ = time.perf_counter() - start_time
+        self.total_runtime_ = time.perf_counter() - start_time
         return best_labels, None
 
     def _get_cluster_representation(
@@ -233,7 +237,6 @@ class FlowBasedHeuristic:
         n_objects = objects.shape[0]
         sink = n_objects + self.n_clusters
         distances = self._compute_distance_matrix(objects, centers)
-        start_time = time.perf_counter()
 
         # Lower bounds
         demand = self._compute_demand(
@@ -244,11 +247,13 @@ class FlowBasedHeuristic:
             current_group=current_group, counts=counts["min"], demand=demand
         )
 
-        model, status = self._construct_mcf_network(
+        model = self._construct_mcf_network(
             distances=distances,
             demand=demand,
             capacity=capacity,
         )
+        start_time = time.perf_counter()
+        status = model.solve()
         elapsed_time = time.perf_counter() - start_time
 
         if status != model.OPTIMAL:
@@ -345,7 +350,7 @@ class FlowBasedHeuristic:
         demand: np.ndarray,
         capacity: np.ndarray,
         C: float = 1e3,
-    ) -> tuple[SimpleMinCostFlow, SimpleMinCostFlow.Status]:
+    ) -> SimpleMinCostFlow:
         """
         Construct the MCF network.
 
@@ -363,9 +368,7 @@ class FlowBasedHeuristic:
         Returns
         -------
         model : SimpleMinCostFlow
-            Solved MCF model.
-        status : SimpleMinCostFlow.Status
-            MCF solution status.
+            MCF model (not solved yet).
         """
         n_objects = distances.shape[0]
         objects = range(n_objects)
@@ -403,13 +406,12 @@ class FlowBasedHeuristic:
         mcf.set_nodes_supplies(
             nodes=sink, supplies=-n_objects - np.sum(demand)
         )
-        status = mcf.solve()
-        return mcf, status
+        return mcf
 
     @staticmethod
     def _assign_objects_faiss(
         objects: np.ndarray, centers: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, float]:
         """
         Assign objects to nearest cluster centers using FAISS L2 distance.
 
@@ -426,6 +428,8 @@ class FlowBasedHeuristic:
             Cluster assignments.
         distances : np.ndarray
             Squared Euclidean distance from each object to its assigned center.
+        elapsed_time : float
+            Elapsed time for FAISS assignment.
         """
         d = centers.shape[1]
         # FAISS requires float32
@@ -433,10 +437,12 @@ class FlowBasedHeuristic:
         centers = np.asarray(centers, dtype=np.float32)
         index = faiss.IndexFlatL2(d)
         index.add(centers)
+        start_time = time.perf_counter()
         faiss_distances, faiss_labels = index.search(objects, 1)
+        elapsed_time = time.perf_counter() - start_time
         labels = faiss_labels[:, 0].astype(int)
         distances = faiss_distances[:, 0]
-        return labels, distances
+        return labels, distances, elapsed_time
 
     @staticmethod
     def _adjust_demand(

@@ -54,8 +54,13 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         Number of objects in each cluster.
     n_iter_ : int
         Number of iterations performed by the algorithm.
-    runtime_ : float
+    total_runtime_ : float
         Running time of the algorithm in seconds.
+    external_runtime_ : float | None
+        Running time spent in the calls of external compiled libraries in seconds. 
+        None for the exact approaches.
+    python_runtime_ : float | None
+        Running time spent in Python code in seconds. None for the exact approaches.
     violation_ : np.ndarray | None
         Percentage violation of target balance (fairness constraint violation) for
         each sensitive feature, shape (n_sensitive_features,).
@@ -160,12 +165,16 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         self._compute_target_balance()
 
         getattr(self, f"_{self.algorithm}")()
+        if self.external_runtime_ is not None:
+            self.python_runtime_ = self.total_runtime_ - self.external_runtime_
         return self
 
     def _reset_results(self) -> None:
         """Reset the result attributes populated by the algorithms."""
         self.n_iter_ = 0
-        self.runtime_ = 0.0
+        self.total_runtime_ = 0.0
+        self.external_runtime_ = None
+        self.python_runtime_ = None
         self.cost_ = float("inf")
         self.balance_ = None
         self.cluster_balances_ = []
