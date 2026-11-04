@@ -63,7 +63,7 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         Percentage excess with respect to target balance for each sensitive feature,
         shape (n_sensitive_features,).
     status_ : int | str | None
-        Status returned by the solver (Gurobi code or SCIP status string).
+        Status returned by the solver (Gurobi code, or SCIP or Hexaly status string).
     bound_ : float | None
         Best lower bound (LB) on the cost returned by the solver.
     gap_ : float | None

@@ -260,6 +260,16 @@ class DataPreprocessor:
         )
         self.X = self.X.iloc[sampled_indices]
         self.sensitive_features = self.sensitive_features[sampled_indices]
+
+        # Rare protected groups can be lost when the subsample is too small
+        for m, sensitive_name in enumerate(self.sensitive_names):
+            for idx, name in enumerate(self.protected_group_names[m]):
+                if not np.any(self.sensitive_features[:, m] == idx):
+                    raise ValueError(
+                        f"Protected group '{name}' of sensitive feature "
+                        f"'{sensitive_name}' has no objects in the subsample. "
+                        "Increase n_subsample or set binary=True."
+                    )
         self._show_data_summary()
 
     def _show_data_summary(self) -> None:

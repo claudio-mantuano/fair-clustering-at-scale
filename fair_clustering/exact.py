@@ -45,7 +45,6 @@ class ExactApproaches:
         optimizer.solve()
         self.runtime_ = time.perf_counter() - start_time
         self._extract_results_hexaly(optimizer, clusters)
-        self._extract_results()
         optimizer.delete()  # release Hexaly license token
 
     def _extract_results_gurobi(
@@ -81,9 +80,15 @@ class ExactApproaches:
 
     def _extract_results_hexaly(self, optimizer, clusters) -> None:
         """Extract results from solved Hexaly model."""
-        for cluster_id, cluster in enumerate(clusters):
-            self.labels_[cluster.value] = cluster_id
-        self.bound_ = optimizer.solution.get_objective_bound(0)
+        status = optimizer.solution.status.name
+        if status in ("FEASIBLE", "OPTIMAL"):
+            for cluster_id, cluster in enumerate(clusters):
+                self.labels_[cluster.value] = cluster_id
+            self.bound_ = optimizer.solution.get_objective_bound(0)
+            self._extract_results()
+        else:
+            self.cost_ = None
+            self.status_ = status
 
     def _build_miqcp_model_gurobi(self) -> tuple[gb.Model, gb.tupledict]:
         """Construct MIQCP model for Gurobi."""
