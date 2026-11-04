@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 class ExperimentConfig:
     # Data
     dataset: str
-    sensitive_name: str
+    sensitive_names: list[str]
     binary: bool
     n_subsample: int | None
     n_batches: int | None
@@ -152,7 +152,7 @@ class ExperimentRunner:
         )
         clustering.fit(
             X=self.X,
-            sensitive_feature=self.sensitive_feature,
+            sensitive_features=self.sensitive_features,
             batch_X=self.batch_X,
             batch_map=self.batch_map,
             batch_weights=self.batch_weights,
@@ -218,7 +218,7 @@ class ExperimentRunner:
             self.X.shape[0],
             self.batch_X.shape[0] if algorithm == "smpfc" else None,
             self.features,
-            self.config.sensitive_name,
+            self.config.sensitive_names,
             self.protected_group_names,
             self._get_preprocessing(),
             algorithm,
@@ -254,7 +254,7 @@ class ExperimentRunner:
             self.X.shape[0],
             self.batch_X.shape[0] if algorithm == "smpfc" else None,
             self.features,
-            self.config.sensitive_name,
+            self.config.sensitive_names,
             self.protected_group_names,
             self._get_preprocessing(),
             algorithm,
@@ -283,21 +283,24 @@ class ExperimentRunner:
         """Append summary values for a given instance."""
         columns = list(self.results.keys())
 
-        def compute_avg(column: str) -> float | None:
-            """Compute average results across different random seeds."""
+        def compute_avg(column: str) -> float | np.ndarray | None:
+            """
+            Compute average results across different random seeds (separately for
+            each sensitive feature in columns containing per-feature values).
+            """
             values = [
                 val
                 for val in self.results[column][-window_size:]
                 if val is not None
             ]
-            return sum(values) / len(values) if values else None
+            return np.mean(values, axis=0) if values else None
 
         average_row = [
             self.config.dataset,
             self.X.shape[0],
             self.batch_X.shape[0] if algorithm == "smpfc" else None,
             self.features,
-            self.config.sensitive_name,
+            self.config.sensitive_names,
             self.protected_group_names,
             self._get_preprocessing(),
             algorithm,
@@ -341,6 +344,9 @@ class ExperimentRunner:
     def _append_result_row(self, row: list[Any]) -> None:
         """Append a row to the dictionary of results."""
         for col, value in zip(self.results.keys(), row):
+            # Per-feature arrays are stored as lists to be readable in the CSV
+            if isinstance(value, np.ndarray):
+                value = value.tolist()
             self.results[col].append(value)
 
     def _find_best_result(
@@ -371,25 +377,28 @@ class ExperimentRunner:
     def _plot_clustering(
         self, algorithm: str, k: int, tolerance: float, row: dict[str, Any]
     ) -> None:
-        """Generate and save a clustering visualization."""
+        """
+        Generate and save a clustering visualization (only for the first sensitive
+        feature).
+        """
         try:
             centers = np.array(row["Centers"])
             labels = np.array(row["Labels"])
-            cluster_balances = np.array(row["Balance of clusters"])
+            cluster_balances = np.array(row["Balance of clusters"][0])
 
             plot_clustering(
                 self.config.dataset,
                 self.X,
-                self.config.sensitive_name,
-                self.sensitive_feature,
-                self.protected_group_names,
+                self.config.sensitive_names[0],
+                self.sensitive_features[:, 0],
+                self.protected_group_names[0],
                 algorithm,
                 k,
                 tolerance,
                 labels,
                 centers,
                 row["Clustering cost"],
-                row["Clustering balance"],
+                row["Clustering balance"][0],
                 cluster_balances,
             )
 
@@ -411,7 +420,7 @@ class ExperimentRunner:
         """Load and preprocess dataset."""
         preprocessing = DataPreprocessor(
             dataset=self.config.dataset,
-            sensitive_name=self.config.sensitive_name,
+            sensitive_names=self.config.sensitive_names,
             binary=self.config.binary,
             n_subsample=self.config.n_subsample,
             n_batches=self.config.n_batches,
@@ -423,7 +432,7 @@ class ExperimentRunner:
 
         self.X = preprocessing.X
         self.protected_group_names = preprocessing.protected_group_names
-        self.sensitive_feature = preprocessing.sensitive_feature
+        self.sensitive_features = preprocessing.sensitive_features
         self.dataset_balance = preprocessing.dataset_balance
         self.features = preprocessing.features
         self.batch_X = preprocessing.batch_X
@@ -438,7 +447,7 @@ class ExperimentRunner:
             "Objects",
             "Batches",
             "Features",
-            "Sensitive feature",
+            "Sensitive features",
             "Protected groups",
             "Preprocessing",
             "Algorithm",
@@ -479,6 +488,10 @@ class ExperimentRunner:
                 raise ValueError(
                     "Please indicate at least one tolerance value."
                 )
+        if self.config.msflowfc and len(self.config.sensitive_names) > 1:
+            raise ValueError(
+                "MS-FlowFC supports only a single sensitive feature."
+            )
         if self.config.smpfc and self.config.n_batches is None:
             raise ValueError(
                 "The algorithm S-MPFC is selected, but n_batches is None."

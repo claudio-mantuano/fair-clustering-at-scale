@@ -100,6 +100,7 @@ class ExactApproaches:
         objects = range(n)
         clusters = range(self.n_clusters)
         features = range(d)
+        sensitive = range(self.sensitive_features.shape[1])
         v_min = self.X.min(axis=0)
         v_max = self.X.max(axis=0)
         big_M = self._compute_distance_matrix(self.X, self.X).max(axis=1)
@@ -113,8 +114,12 @@ class ExactApproaches:
         )
         x = model.addVars(objects, clusters, vtype=gb.GRB.BINARY)
         distances = model.addVars(objects, clusters)
-        y_lower = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
-        y_upper = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
+        y_lower = model.addVars(
+            sensitive, clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS
+        )
+        y_upper = model.addVars(
+            sensitive, clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS
+        )
         model.update()
 
         model.addConstrs(x.sum(i, "*") == 1 for i in objects)
@@ -128,13 +133,17 @@ class ExactApproaches:
             )
         )
 
-        protected_group_labels = np.unique(self.sensitive_feature)
-        for j in clusters:
-            for g in protected_group_labels:
-                counts_g = x.sum(self.protected_groups_[g], j)
-                model.addConstr(y_lower[j] <= counts_g)
-                model.addConstr(y_upper[j] >= counts_g)
-            model.addConstr(y_lower[j] >= self.target_balance_ * y_upper[j])
+        # Fairness constraints are imposed separately for each sensitive feature
+        for m in sensitive:
+            protected_group_labels = np.unique(self.sensitive_features[:, m])
+            for j in clusters:
+                for g in protected_group_labels:
+                    counts_g = x.sum(self.protected_groups_[m][g], j)
+                    model.addConstr(y_lower[m, j] <= counts_g)
+                    model.addConstr(y_upper[m, j] >= counts_g)
+                model.addConstr(
+                    y_lower[m, j] >= self.target_balance_[m] * y_upper[m, j]
+                )
 
         model.addConstrs(
             x[i, j] == 0 for i in range(k - 1) for j in range(i + 1, k)
@@ -155,14 +164,18 @@ class ExactApproaches:
         n_objects, n_features = self.X.shape
         clusters = range(self.n_clusters)
         features = range(n_features)
+        sensitive = range(self.sensitive_features.shape[1])
         optimizer, model = self._setup_solver(solver="hexaly")
 
         X = model.array(self.X)
-        protected_group_labels = np.unique(self.sensitive_feature)
-        group_indicators = [
-            model.array((self.sensitive_feature == g).astype(int))
-            for g in protected_group_labels
-        ]
+        # Group indicators of each sensitive feature
+        group_indicators = []
+        for m in sensitive:
+            protected_group_labels = np.unique(self.sensitive_features[:, m])
+            group_indicators.append([
+                model.array((self.sensitive_features[:, m] == g).astype(int))
+                for g in protected_group_labels
+            ])
         # Create set variables
         cluster_set_vars = [model.set(n_objects) for _ in clusters]
         # Impose uniqueness and completeness of assignment
@@ -173,14 +186,15 @@ class ExactApproaches:
             size = model.count(cluster)
             # Impose non-emptiness of clusters
             model.constraint(size >= 1)
-            # Impose fairness
-            counts = [
-                model.sum(cluster, model.lambda_function(lambda i: model.at(a, i)))
-                for a in group_indicators
-            ]
-            model.constraint(
-                model.min(counts) >= self.target_balance_ * model.max(counts)
-            )
+            # Impose fairness separately for each sensitive feature
+            for m in sensitive:
+                counts = [
+                    model.sum(cluster, model.lambda_function(lambda i: model.at(a, i)))
+                    for a in group_indicators[m]
+                ]
+                model.constraint(
+                    model.min(counts) >= self.target_balance_[m] * model.max(counts)
+                )
             # Define cluster centers
             centers = []
             for f in features:

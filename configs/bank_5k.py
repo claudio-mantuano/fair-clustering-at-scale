@@ -1,6 +1,6 @@
 CONFIG = {
     "dataset": "bank_5k",
-    "sensitive_name": "marital",
+    "sensitive_names": ["marital"],
     "binary": False,
     "n_subsample": 5000,
     "n_batches": None,

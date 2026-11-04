@@ -1,6 +1,6 @@
 CONFIG = {
     "dataset": "adult",
-    "sensitive_name": "sex",
+    "sensitive_names": ["sex"],
     "binary": True,
     "n_subsample": None,
     "n_batches": None,

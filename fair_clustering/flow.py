@@ -33,6 +33,10 @@ class FlowBasedHeuristic:
 
     def _msflowfc(self) -> None:
         """Run the MS-FlowFC algorithm."""
+        if self.sensitive_features.shape[1] > 1:
+            raise ValueError(
+                "MS-FlowFC supports only a single sensitive feature."
+            )
         self.labels_, self.status_ = self._run_decomposition_mcf()
         if self.status_ is None:
             self._extract_results()
@@ -67,9 +71,11 @@ class FlowBasedHeuristic:
         best_labels = np.full(self.X.shape[0], -1, dtype=np.int32)
         best_cost = float("inf")
         start_time = time.perf_counter()
+        # Protected groups of the single sensitive feature
+        protected_groups = self.protected_groups_[0]
 
         centers = self._initialize_centers_kmeans_pp(
-            X=self.X[self.protected_groups_[0]],
+            X=self.X[protected_groups[0]],
             n_centers=self.n_clusters,
             seed=self.seed,
         )
@@ -80,7 +86,7 @@ class FlowBasedHeuristic:
 
             # First protected group assignment using FAISS
             first_stage_labels, first_stage_distances = self._assign_objects_faiss(
-                objects=self.X[self.protected_groups_[0]], centers=centers
+                objects=self.X[protected_groups[0]], centers=centers
             )
             cluster_sizes = np.bincount(first_stage_labels, minlength=self.n_clusters)
             empty_clusters = list(np.flatnonzero(cluster_sizes == 0))
@@ -102,13 +108,13 @@ class FlowBasedHeuristic:
                         cluster_sizes[first_stage_labels[obj]] -= 1
                         empty_cluster = empty_clusters.pop()
                         first_stage_labels[obj] = empty_cluster
-                        centers[empty_cluster] = self.X[self.protected_groups_[0][obj]]
-                        
-            labels[self.protected_groups_[0]] = first_stage_labels
+                        centers[empty_cluster] = self.X[protected_groups[0][obj]]
+
+            labels[protected_groups[0]] = first_stage_labels
 
             # Assignment of objects from remaining protected groups
             idx_assigned_groups = [0]
-            for g in range(1, len(self.protected_groups_)):
+            for g in range(1, len(protected_groups)):
                 # Count objects from most represented group per cluster
                 counts = self._get_cluster_representation(
                     labels=labels, idx_assigned_groups=idx_assigned_groups
@@ -116,11 +122,11 @@ class FlowBasedHeuristic:
                 # MCF-based assignment
                 multi_stage_labels, _ = self._assign_objects_min_cost_flow(
                     current_group=g,
-                    objects=self.X[self.protected_groups_[g]],
+                    objects=self.X[protected_groups[g]],
                     centers=centers,
                     counts=counts,
                 )
-                labels[self.protected_groups_[g]] = multi_stage_labels
+                labels[protected_groups[g]] = multi_stage_labels
                 idx_assigned_groups.append(g)  # add last protected group
             assignment_runtime = time.perf_counter() - assignment_start_time
 
@@ -188,7 +194,7 @@ class FlowBasedHeuristic:
 
         for cluster in clusters:
             protected_group_counts = np.array([
-                np.sum(labels[self.protected_groups_[g]] == cluster)
+                np.sum(labels[self.protected_groups_[0][g]] == cluster)
                 for g in idx_assigned_groups
             ])
             representation["max"][cluster] = protected_group_counts.max()
@@ -277,9 +283,9 @@ class FlowBasedHeuristic:
         demand : np.ndarray
             Demand vector (negative values).
         """
-        n_objects_group = self.protected_groups_[current_group].shape[0]
+        n_objects_group = self.protected_groups_[0][current_group].shape[0]
         # Raw demand (negative values)
-        demand = -np.ceil(self.target_balance_ * counts).astype(np.int32)
+        demand = -np.ceil(self.target_balance_[0] * counts).astype(np.int32)
         # Demand cannot be positive
         demand[demand > 0] = 0
         # Residual demand to pass to the sink
@@ -312,9 +318,9 @@ class FlowBasedHeuristic:
         capacity : np.ndarray
             Capacity vector (non-negative values).
         """
-        n_objects_group = self.protected_groups_[current_group].shape[0]
+        n_objects_group = self.protected_groups_[0][current_group].shape[0]
         # Raw capacity (non-negative values)
-        capacity = np.floor((1 / self.target_balance_) * counts).astype(
+        capacity = np.floor((1 / self.target_balance_[0]) * counts).astype(
             np.int32
         )
         capacity += demand

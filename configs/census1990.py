@@ -1,6 +1,6 @@
 CONFIG = {
     "dataset": "census1990",
-    "sensitive_name": "iSex",
+    "sensitive_names": ["iSex"],
     "binary": True,
     "n_subsample": None,
     "n_batches": 100,

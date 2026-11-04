@@ -279,6 +279,7 @@ class MILPBasedHeuristic:
         X = self.X if self.algorithm == "mpfc" else self.batch_X
         objects = range(X.shape[0])
         clusters = range(self.n_clusters)
+        sensitive = range(self.sensitive_features.shape[1])
 
         model = gb.Model()
         model.Params.OutputFlag = 0
@@ -287,8 +288,12 @@ class MILPBasedHeuristic:
 
         # Variables
         x = model.addVars(distances, obj=distances, vtype=gb.GRB.BINARY)
-        y_lower = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
-        y_upper = model.addVars(clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS)
+        y_lower = model.addVars(
+            sensitive, clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS
+        )
+        y_upper = model.addVars(
+            sensitive, clusters, lb=0.0, vtype=gb.GRB.CONTINUOUS
+        )
         if warm_start and iter > 0:
             if np.any(initial_labels == -1):
                 raise ValueError(
@@ -301,18 +306,23 @@ class MILPBasedHeuristic:
         model.addConstrs(x.sum(i, "*") == 1 for i in objects)
         model.addConstrs(x.sum("*", j) >= 1 for j in clusters)
 
-        protected_group_labels = np.unique(self.sensitive_feature)
-        for j in clusters:
-            for g in protected_group_labels:
-                if self.algorithm == "mpfc":
-                    count_g = x.sum(self.protected_groups_[g], j)
-                elif self.algorithm == "smpfc":
-                    count_g = gb.quicksum(
-                        self.batch_weights[i, g] * x[i, j] for i in objects
-                    )
-                model.addConstr(y_lower[j] <= count_g)
-                model.addConstr(y_upper[j] >= count_g)
-            model.addConstr(y_lower[j] >= self.target_balance_ * y_upper[j])
+        # Fairness constraints are imposed separately for each sensitive feature
+        for m in sensitive:
+            protected_group_labels = np.unique(self.sensitive_features[:, m])
+            for j in clusters:
+                for g in protected_group_labels:
+                    if self.algorithm == "mpfc":
+                        count_g = x.sum(self.protected_groups_[m][g], j)
+                    elif self.algorithm == "smpfc":
+                        count_g = gb.quicksum(
+                            self.batch_weights[m][i, g] * x[i, j]
+                            for i in objects
+                        )
+                    model.addConstr(y_lower[m, j] <= count_g)
+                    model.addConstr(y_upper[m, j] >= count_g)
+                model.addConstr(
+                    y_lower[m, j] >= self.target_balance_[m] * y_upper[m, j]
+                )
         return model, x
 
     def _setup_milp_scip(
@@ -348,6 +358,7 @@ class MILPBasedHeuristic:
         X = self.X if self.algorithm == "mpfc" else self.batch_X
         objects = range(X.shape[0])
         clusters = range(self.n_clusters)
+        sensitive = range(self.sensitive_features.shape[1])
 
         model = scip.Model()
         model.hideOutput()
@@ -359,8 +370,16 @@ class MILPBasedHeuristic:
             (i, j): model.addVar(vtype="B", obj=distances[i, j])
             for (i, j) in distances
         }
-        y_lower = {j: model.addVar(vtype="C", lb=0.0) for j in clusters}
-        y_upper = {j: model.addVar(vtype="C", lb=0.0) for j in clusters}
+        y_lower = {
+            (m, j): model.addVar(vtype="C", lb=0.0)
+            for m in sensitive
+            for j in clusters
+        }
+        y_upper = {
+            (m, j): model.addVar(vtype="C", lb=0.0)
+            for m in sensitive
+            for j in clusters
+        }
         if warm_start and iter > 0:
             if np.any(initial_labels == -1):
                 raise ValueError(
@@ -378,18 +397,23 @@ class MILPBasedHeuristic:
         for j in clusters:
             model.addCons(scip.quicksum(x[i, j] for i in objects) >= 1)
 
-        protected_group_labels = np.unique(self.sensitive_feature)
-        for j in clusters:
-            for g in protected_group_labels:
-                if self.algorithm == "mpfc":
-                    count_g = scip.quicksum(
-                        x[i, j] for i in self.protected_groups_[g]
-                    )
-                elif self.algorithm == "smpfc":
-                    count_g = scip.quicksum(
-                        self.batch_weights[i, g] * x[i, j] for i in objects
-                    )
-                model.addCons(y_lower[j] <= count_g)
-                model.addCons(y_upper[j] >= count_g)
-            model.addCons(y_lower[j] >= self.target_balance_ * y_upper[j])
+        # Fairness constraints are imposed separately for each sensitive feature
+        for m in sensitive:
+            protected_group_labels = np.unique(self.sensitive_features[:, m])
+            for j in clusters:
+                for g in protected_group_labels:
+                    if self.algorithm == "mpfc":
+                        count_g = scip.quicksum(
+                            x[i, j] for i in self.protected_groups_[m][g]
+                        )
+                    elif self.algorithm == "smpfc":
+                        count_g = scip.quicksum(
+                            self.batch_weights[m][i, g] * x[i, j]
+                            for i in objects
+                        )
+                    model.addCons(y_lower[m, j] <= count_g)
+                    model.addCons(y_upper[m, j] >= count_g)
+                model.addCons(
+                    y_lower[m, j] >= self.target_balance_[m] * y_upper[m, j]
+                )
         return model, x

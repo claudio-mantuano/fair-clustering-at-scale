@@ -44,34 +44,41 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         Coordinate array of cluster centers, shape (n_clusters, n_features).
     cost_ : float
         Total within-cluster squared Euclidean distance.
-    balance_ : float | None
-        Minimum balance across all clusters.
-    cluster_balances_ : list[float]
-        List of balance values for each cluster.
+    balance_ : np.ndarray | None
+        Minimum balance across all clusters for each sensitive feature, shape
+        (n_sensitive_features,).
+    cluster_balances_ : np.ndarray
+        Balance of each cluster for each sensitive feature, shape
+        (n_sensitive_features, n_clusters).
     cluster_sizes_ : list[int]
         Number of objects in each cluster.
     n_iter_ : int
         Number of iterations performed by the algorithm.
     runtime_ : float
         Running time of the algorithm in seconds.
-    violation_ : float | None
-        Percentage violation of target balance (fairness constraint violation).
-    excess_ : float | None
-        Percentage excess with respect to target balance.
+    violation_ : np.ndarray | None
+        Percentage violation of target balance (fairness constraint violation) for
+        each sensitive feature, shape (n_sensitive_features,).
+    excess_ : np.ndarray | None
+        Percentage excess with respect to target balance for each sensitive feature,
+        shape (n_sensitive_features,).
     status_ : int | str | None
         Status returned by the solver (Gurobi code or SCIP status string).
     bound_ : float | None
         Best lower bound (LB) on the cost returned by the solver.
     gap_ : float | None
         Relative gap (UB - LB) / UB between the cost and the best bound.
-    protected_groups_ : list[np.ndarray]
-        List of arrays containing indices of objects in each group sorted by size.
-    dataset_balance_ : float
-        Balance of the dataset.
-    max_balance_ : float
-        Maximum balance achievable given data and number of clusters.
-    target_balance_ : float
-        Target balance for the fair clustering algorithms.
+    protected_groups_ : list[list[np.ndarray]]
+        For each sensitive feature, list of arrays containing indices of objects in
+        each group sorted by size.
+    dataset_balance_ : np.ndarray
+        Balance of the dataset for each sensitive feature, shape (n_sensitive_features,).
+    max_balance_ : np.ndarray
+        Maximum balance achievable given data and number of clusters for each
+        sensitive feature, shape (n_sensitive_features,).
+    target_balance_ : np.ndarray
+        Target balance for the fair clustering algorithms for each sensitive feature,
+        shape (n_sensitive_features,).
     """
 
     _SUPPORTED_ALGORITHMS = ("mpfc", "smpfc", "msflowfc", "miqcp", "setvars")
@@ -108,10 +115,10 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
     def fit(
         self,
         X: np.ndarray,
-        sensitive_feature: np.ndarray,
+        sensitive_features: np.ndarray,
         batch_X: np.ndarray | None = None,
         batch_map: np.ndarray | None = None,
-        batch_weights: np.ndarray | None = None,
+        batch_weights: list[np.ndarray] | None = None,
     ) -> "FairClustering":
         """
         Run the selected fair clustering algorithm on the given data.
@@ -120,14 +127,17 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         ----------
         X : np.ndarray
             Non-sensitive feature matrix, shape (n_objects, n_features).
-        sensitive_feature : np.ndarray
-            Protected group labels, shape (n_objects,).
+        sensitive_features : np.ndarray
+            Protected group labels of each sensitive feature, shape
+            (n_objects, n_sensitive_features), or shape (n_objects,) for a single
+            sensitive feature. MS-FlowFC supports only a single sensitive feature.
         batch_X : np.ndarray | None, default=None
             Non-sensitive feature matrix for S-MPFC, shape (n_batches, n_features).
         batch_map : np.ndarray | None, default=None
             Mapping from batches (representatives) to indices of the original dataset.
-        batch_weights : np.ndarray | None, default=None
-            Number of objects from each protected group in the batches.
+        batch_weights : list[np.ndarray] | None, default=None
+            Number of objects from each protected group in the batches, one array
+            of shape (n_batches, n_groups) per sensitive feature.
 
         Returns
         -------
@@ -135,7 +145,10 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
             Fitted instance with populated result attributes.
         """
         self.X = X
-        self.sensitive_feature = sensitive_feature
+        # A single sensitive feature can also be passed as a 1D array
+        if sensitive_features.ndim == 1:
+            sensitive_features = sensitive_features.reshape(-1, 1)
+        self.sensitive_features = sensitive_features
         self.batch_X = batch_X
         self.batch_map = batch_map
         self.batch_weights = batch_weights
@@ -171,33 +184,46 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         self.cluster_centers_ = np.full(
             (self.n_clusters, self.X.shape[1]), -1.0, dtype=float
         )
-        group_labels = np.unique(self.sensitive_feature)
-        group_size = {
-            g: np.sum(self.sensitive_feature == g) for g in group_labels
-        }
-        # Labels of protected groups are sorted by size (largest first)
-        sorted_groups = sorted(
-            group_labels, key=lambda g: group_size[g], reverse=True
-        )
-        self.protected_groups_ = [
-            np.flatnonzero(self.sensitive_feature == g) for g in sorted_groups
-        ]
+        self.protected_groups_ = []
+        for m in range(self.sensitive_features.shape[1]):
+            sensitive_feature = self.sensitive_features[:, m]
+            group_labels = np.unique(sensitive_feature)
+            group_size = {
+                g: np.sum(sensitive_feature == g) for g in group_labels
+            }
+            # Labels of protected groups are sorted by size (largest first)
+            sorted_groups = sorted(
+                group_labels, key=lambda g: group_size[g], reverse=True
+            )
+            self.protected_groups_.append(
+                [np.flatnonzero(sensitive_feature == g) for g in sorted_groups]
+            )
 
     def _compute_dataset_balance(self) -> None:
-        """Compute dataset balance for the specified sensitive feature."""
-        group_counts = np.bincount(self.sensitive_feature)
-        self.dataset_balance_ = group_counts.min() / group_counts.max()
+        """Compute dataset balance for each sensitive feature."""
+        self.dataset_balance_ = np.zeros(self.sensitive_features.shape[1])
+        for m in range(self.sensitive_features.shape[1]):
+            group_counts = np.bincount(self.sensitive_features[:, m])
+            self.dataset_balance_[m] = group_counts.min() / group_counts.max()
 
     def _compute_max_balance(self) -> None:
-        """Compute the maximum balance achievable given data and number of clusters."""
-        n_smallest_group = self.protected_groups_[-1].shape[0]
-        n_largest_group = self.protected_groups_[0].shape[0]
-        self.max_balance_ = np.floor(
-            n_smallest_group / self.n_clusters
-        ) / np.ceil(n_largest_group / self.n_clusters)
+        """
+        Compute the maximum balance achievable given data and number of clusters
+        for each sensitive feature.
+        """
+        self.max_balance_ = np.zeros(len(self.protected_groups_))
+        for m, protected_groups in enumerate(self.protected_groups_):
+            n_smallest_group = protected_groups[-1].shape[0]
+            n_largest_group = protected_groups[0].shape[0]
+            self.max_balance_[m] = np.floor(
+                n_smallest_group / self.n_clusters
+            ) / np.ceil(n_largest_group / self.n_clusters)
 
     def _compute_target_balance(self) -> None:
-        """Compute the target balance based on the tolerance parameter."""
+        """
+        Compute the target balance for each sensitive feature based on the
+        tolerance parameter.
+        """
         if self.target == "maximum":
             self.target_balance_ = (1 - self.tolerance) * self.max_balance_
         elif self.target == "dataset":
@@ -217,7 +243,7 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         )
         self.balance_, self.cluster_balances_ = (
             self._get_clustering_balance(
-                self.sensitive_feature, self.labels_
+                self.sensitive_features, self.labels_
             )
         )
         self.cluster_sizes_ = self._get_cluster_sizes(self.labels_)
@@ -227,9 +253,9 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
             / self.target_balance_
         ) * 100
         # How much below target balance (0 if higher or equal)
-        self.violation_ = max(bal_gap, 0)
+        self.violation_ = np.maximum(bal_gap, 0)
         # How much above target balance (0 if below)
-        self.excess_ = max(-bal_gap, 0)
+        self.excess_ = np.maximum(-bal_gap, 0)
         # Gap between cost (UB) and best bound (LB), only for exact approaches
         if self.bound_ is not None:
             self.gap_ = ((self.cost_ - self.bound_) / self.cost_) * 100
@@ -353,7 +379,8 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
         start_time = time.perf_counter()
         n_features = X.shape[1]
 
-        weights = self.batch_weights.sum(axis=1)
+        # Batch sizes (identical for every sensitive feature)
+        weights = self.batch_weights[0].sum(axis=1)
         coordinates_weighted_sum = np.zeros(
             (n_clusters, n_features), dtype=X.dtype
         )
@@ -393,43 +420,49 @@ class FairClustering(MILPBasedHeuristic, FlowBasedHeuristic, ExactApproaches):
 
     @staticmethod
     def _get_clustering_balance(
-        sensitive_feature: np.ndarray, labels: np.ndarray
-    ) -> tuple[float, list[float]]:
+        sensitive_features: np.ndarray, labels: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Compute minimum balance across all clusters.
+        Compute minimum balance across all clusters for each sensitive feature.
 
         Parameters
         ----------
-        sensitive_feature : np.ndarray
-            Protected group labels, shape (n_objects,).
+        sensitive_features : np.ndarray
+            Protected group labels of each sensitive feature, shape
+            (n_objects, n_sensitive_features).
         labels : np.ndarray
             Cluster assignment for each object, shape (n_objects,).
 
         Returns
         -------
-        clustering_balance : float
-            Minimum balance across all clusters.
-        balances : list[float]
-            List of balance values for each cluster.
+        clustering_balance : np.ndarray
+            Minimum balance across all clusters for each sensitive feature, shape
+            (n_sensitive_features,).
+        cluster_balances : np.ndarray
+            Balance of each cluster for each sensitive feature, shape
+            (n_sensitive_features, n_clusters).
         """
         n_clusters = labels.max() + 1
-        n_groups = sensitive_feature.max() + 1
+        cluster_balances = np.zeros((sensitive_features.shape[1], n_clusters))
 
-        # Number of objects from each group in each cluster
-        counts, _, _ = np.histogram2d(
-            labels,
-            sensitive_feature,
-            bins=[n_clusters, n_groups],
-            range=[(0, n_clusters), (0, n_groups)],
-        )
+        for m in range(sensitive_features.shape[1]):
+            n_groups = sensitive_features[:, m].max() + 1
 
-        max_counts = counts.max(axis=1)
-        max_counts[max_counts == 0] = 1  # no division by 0
-        min_counts = counts.min(axis=1)
+            # Number of objects from each group in each cluster
+            counts, _, _ = np.histogram2d(
+                labels,
+                sensitive_features[:, m],
+                bins=[n_clusters, n_groups],
+                range=[(0, n_clusters), (0, n_groups)],
+            )
 
-        balances = min_counts / max_counts
-        clustering_balance = balances.min()
-        cluster_balances = balances.tolist()
+            max_counts = counts.max(axis=1)
+            max_counts[max_counts == 0] = 1  # no division by 0
+            min_counts = counts.min(axis=1)
+
+            cluster_balances[m] = min_counts / max_counts
+
+        clustering_balance = cluster_balances.min(axis=1)
         return clustering_balance, cluster_balances
 
     @staticmethod

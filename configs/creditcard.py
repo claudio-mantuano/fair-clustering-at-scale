@@ -1,6 +1,6 @@
 CONFIG = {
     "dataset": "creditcard",
-    "sensitive_name": "X2",
+    "sensitive_names": ["X2"],
     "binary": True,
     "n_subsample": None,
     "n_batches": None,

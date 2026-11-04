@@ -1,6 +1,6 @@
 CONFIG = {
     "dataset": "synthetic_a",
-    "sensitive_name": "X3",
+    "sensitive_names": ["X3"],
     "binary": False,
     "n_subsample": None,
     "n_batches": None,

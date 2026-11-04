@@ -1,6 +1,6 @@
 CONFIG = {
     "dataset": "diabetes",
-    "sensitive_name": "gender",
+    "sensitive_names": ["gender"],
     "binary": True,
     "n_subsample": None,
     "n_batches": None,

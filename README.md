@@ -70,7 +70,7 @@ fc = FairClustering(algorithm="msflowfc", n_clusters=10, tolerance=0.1)
 fc.fit(X, sensitive_feature)
 
 print(f"Cost: {fc.cost_:.2f}")
-print(f"Balance: {fc.balance_:.2f}")
+print(f"Balance: {np.round(fc.balance_, 2)}")
 print(f"Runtime: {fc.runtime_:.2f}s")
 ```
 
@@ -111,7 +111,7 @@ fc.fit(
 > Free academic licenses are available for [Gurobi](https://www.gurobi.com/academia/academic-program-and-licenses/) and [Hexaly](https://www.hexaly.com/pricing).
 
 > [!NOTE]
-> The implementation currently supports only datasets with a single sensitive feature.
+> Datasets with multiple sensitive features are supported by `mpfc`, `smpfc`, `miqcp`, and `setvars`, while `msflowfc` supports only a single sensitive feature. Pass the sensitive features to `.fit()` and `create_batches` as an array of shape `(n_objects, n_sensitive_features)`; a 1D array, as in the examples above, is treated as a single sensitive feature.
 
 ## Run experiments
 
@@ -227,8 +227,8 @@ You can use this project's experimental pipeline to reproduce the experiments de
     |:--------------------|:----------------|:----------------------------------------------------------------------------------|
     | **Data**            |                 |                                                                                   |
     | `dataset`           | `str`           | Dataset file name (excluding the file extension)                                  |
-    | `sensitive_name`    | `str`           | Name of the sensitive feature                                                     |
-    | `binary`            | `bool`          | `True` to keep only the two largest protected groups                              |
+    | `sensitive_names`   | `list[str]`     | Names of the sensitive features                                                   |
+    | `binary`            | `bool`          | `True` to keep only the two largest protected groups of each sensitive feature    |
     | `n_subsample`       | `int`           | Desired dataset size for stratified sampling                                      |
     | `n_batches`         | `int`           | Number of batches (representatives) for S-MPFC                                    |
     | `n_features`        | `int`           | Number of non-sensitive features to include                                       |

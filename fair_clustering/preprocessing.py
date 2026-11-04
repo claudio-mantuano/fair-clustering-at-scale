@@ -20,10 +20,10 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 def create_batches(
     X: np.ndarray,
-    sensitive_feature: np.ndarray,
+    sensitive_features: np.ndarray,
     n_batches: int,
     seed: int = 42,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
     """
     Construct batches for S-MPFC by clustering the dataset.
 
@@ -31,8 +31,10 @@ def create_batches(
     ----------
     X : np.ndarray
         Non-sensitive feature matrix, shape (n_objects, n_features).
-    sensitive_feature : np.ndarray
-        Protected group label for each object, shape (n_objects,).
+    sensitive_features : np.ndarray
+        Protected group labels of each sensitive feature, shape
+        (n_objects, n_sensitive_features), or shape (n_objects,) for a single
+        sensitive feature.
     n_batches : int
         Number of batches (representatives).
     seed : int, default=42
@@ -44,20 +46,27 @@ def create_batches(
         Batch centers or representatives, shape (n_batches, n_features).
     batch_map : np.ndarray
         Map from objects to batch labels, shape (n_objects,).
-    batch_weights : np.ndarray
-        Number of objects per protected group in each batch, shape (n_batches, n_groups).
+    batch_weights : list[np.ndarray]
+        Number of objects per protected group in each batch, one array of shape
+        (n_batches, n_groups) per sensitive feature.
     """
     X = X.astype(np.float32)
     n_features = X.shape[1]
+    # A single sensitive feature can also be passed as a 1D array
+    if sensitive_features.ndim == 1:
+        sensitive_features = sensitive_features.reshape(-1, 1)
 
     model = faiss.Kmeans(d=n_features, k=n_batches, niter=10, seed=seed)
     model.train(X)
     _, labels = model.index.search(X, 1)
     labels = labels.flatten()
 
-    n_groups = int(sensitive_feature.max()) + 1
-    weights = np.zeros((n_batches, n_groups), dtype=int)
-    np.add.at(weights, (labels, sensitive_feature), 1)
+    weights = []
+    for m in range(sensitive_features.shape[1]):
+        n_groups = int(sensitive_features[:, m].max()) + 1
+        feature_weights = np.zeros((n_batches, n_groups), dtype=int)
+        np.add.at(feature_weights, (labels, sensitive_features[:, m]), 1)
+        weights.append(feature_weights)
 
     return model.centroids, labels, weights
 
@@ -71,10 +80,10 @@ class DataPreprocessor:
     ----------
     dataset : str
         Dataset name.
-    sensitive_name : str
-        Name of the sensitive feature.
+    sensitive_names : list[str]
+        Names of the sensitive features.
     binary : bool
-        If True, keep only the two largest protected groups.
+        If True, keep only the two largest protected groups of each sensitive feature.
     n_subsample : int | None
         Number of objects to subsample, None to keep entire dataset.
     n_batches : int | None
@@ -90,18 +99,19 @@ class DataPreprocessor:
     ----------
     X : np.ndarray
         Non-sensitive feature matrix after preprocessing.
-    sensitive_feature : np.ndarray
-        Protected group label (factorized) for each object.
-    protected_group_names : list[str]
-        Original names of protected groups.
-    dataset_balance : float
-        Balance of the dataset.
+    sensitive_features : np.ndarray
+        Protected group labels (factorized) of each sensitive feature, shape
+        (n_objects, n_sensitive_features).
+    protected_group_names : list[list[str]]
+        Original names of protected groups for each sensitive feature.
+    dataset_balance : np.ndarray
+        Balance of the dataset for each sensitive feature.
     batch_X : np.ndarray | None
         Reduced dataset composed of batch centers (representatives).
     batch_map : np.ndarray | None
         Map between batch objects and original objects.
-    batch_weights : np.ndarray | None
-        Protected group counts per batch.
+    batch_weights : list[np.ndarray] | None
+        Protected group counts per batch for each sensitive feature.
     batch_runtime : float
         Elapsed time for batch generation.
 
@@ -112,7 +122,7 @@ class DataPreprocessor:
     """
 
     dataset: str
-    sensitive_name: str
+    sensitive_names: list[str]
     binary: bool
     n_subsample: int | None
     n_batches: int | None
@@ -136,7 +146,7 @@ class DataPreprocessor:
         self._convert_features_to_numeric()
         self._subsample_features()
         self._extract_feature_names()
-        self._factorize_sensitive_feature()
+        self._factorize_sensitive_features()
         self._subsample_dataset()
         self._compute_dataset_balance()
         self._convert_to_arrays()
@@ -152,8 +162,8 @@ class DataPreprocessor:
         if self.dataset not in self.UCI_DATASET_IDS:
             try:
                 data = pd.read_csv(f"data/{self.dataset}.csv")
-                self.X = data.drop(columns=self.sensitive_name)
-                self.sensitive_feature = data[self.sensitive_name]
+                self.X = data.drop(columns=self.sensitive_names)
+                self.sensitive_features = data[self.sensitive_names]
             except FileNotFoundError as e:
                 raise ValueError(
                     f"Dataset '{self.dataset}' was not found locally in 'data/' "
@@ -166,8 +176,8 @@ class DataPreprocessor:
                 uci_id = self.UCI_DATASET_IDS[self.dataset]
                 data = fetch_ucirepo(id=uci_id).data.features
                 data.to_csv(f"data/{self.dataset}_raw.csv", index=False)
-                self.X = data.drop(columns=self.sensitive_name)
-                self.sensitive_feature = data[self.sensitive_name]
+                self.X = data.drop(columns=self.sensitive_names)
+                self.sensitive_features = data[self.sensitive_names]
             except Exception as e:
                 raise RuntimeError(f"Failed to download dataset: {e}")
 
@@ -185,27 +195,30 @@ class DataPreprocessor:
         """Store non-sensitive feature names."""
         self.features = self.X.columns.tolist()
 
-    def _factorize_sensitive_feature(self) -> None:
+    def _factorize_sensitive_features(self) -> None:
         """
-        Factorize protected group names and optionally keep only the two largest groups.
+        Optionally keep only the two largest groups of each sensitive feature, then
+        factorize protected group names.
         """
-        self.sensitive_feature, groups = pd.factorize(self.sensitive_feature)
-        self.protected_group_names = groups.tolist()
-
         if self.binary:
-            protected_group_ids, protected_group_counts = np.unique(
-                self.sensitive_feature, return_counts=True
-            )
-            filtered_groups_idx = np.argsort(protected_group_counts)[-2:]
-            filtered_groups = protected_group_ids[filtered_groups_idx]
-            self.protected_group_names = [
-                self.protected_group_names[i] for i in filtered_groups
-            ]
-            # Keep objects from the two largest protected groups
-            mask = np.isin(self.sensitive_feature, filtered_groups)
+            # Keep objects from the two largest protected groups of every sensitive
+            # feature (group sizes are computed on the full dataset)
+            mask = np.ones(self.X.shape[0], dtype=bool)
+            for name in self.sensitive_names:
+                group_counts = self.sensitive_features[name].value_counts()
+                largest_groups = group_counts.index[:2]
+                mask &= self.sensitive_features[name].isin(largest_groups).to_numpy()
             self.X = self.X[mask]
-            self.sensitive_feature = self.sensitive_feature[mask]
-            self.sensitive_feature, _ = pd.factorize(self.sensitive_feature)
+            self.sensitive_features = self.sensitive_features[mask]
+
+        # Factorizing after filtering keeps factors aligned with group names
+        factors = []
+        self.protected_group_names = []
+        for name in self.sensitive_names:
+            factor, groups = pd.factorize(self.sensitive_features[name])
+            factors.append(factor)
+            self.protected_group_names.append(groups.tolist())
+        self.sensitive_features = np.column_stack(factors)
 
         if not self.n_subsample:
             self._show_data_summary()
@@ -217,12 +230,14 @@ class DataPreprocessor:
         if not self.n_subsample:
             return
         rng = np.random.default_rng(42)
-        protected_group_names, counts = np.unique(
-            self.sensitive_feature, return_counts=True
+        # Strata are the combinations of protected groups across sensitive features
+        _, strata = np.unique(
+            self.sensitive_features, axis=0, return_inverse=True
         )
+        strata_labels, counts = np.unique(strata, return_counts=True)
         group_indices = {
-            group: np.flatnonzero(self.sensitive_feature == group)
-            for group in protected_group_names
+            group: np.flatnonzero(strata == group)
+            for group in strata_labels
         }
         proportions = counts / counts.sum()
         objects_per_group = np.floor(self.n_subsample * proportions).astype(
@@ -238,36 +253,39 @@ class DataPreprocessor:
             [
                 rng.choice(group_indices[group], size=n_samples, replace=False)
                 for group, n_samples in zip(
-                    protected_group_names, objects_per_group
+                    strata_labels, objects_per_group
                 )
                 if n_samples > 0
             ]
         )
         self.X = self.X.iloc[sampled_indices]
-        self.sensitive_feature = self.sensitive_feature[sampled_indices]
+        self.sensitive_features = self.sensitive_features[sampled_indices]
         self._show_data_summary()
 
     def _show_data_summary(self) -> None:
-        """Log summary table of protected groups."""
-        counts = np.bincount(self.sensitive_feature)
-        logger.info(
-            f"{'Protected group':<20} {'Factor':<10} {'# Objects':<10}"
-        )
-        logger.info("-" * 46)
-        for idx, name in enumerate(self.protected_group_names):
-            logger.info(f"{name:<20} {idx:<10} {counts[idx]:<10}")
+        """Log summary table of protected groups for each sensitive feature."""
+        for m, sensitive_name in enumerate(self.sensitive_names):
+            counts = np.bincount(self.sensitive_features[:, m])
+            logger.info(
+                f"{sensitive_name:<20} {'Factor':<10} {'# Objects':<10}"
+            )
+            logger.info("-" * 46)
+            for idx, name in enumerate(self.protected_group_names[m]):
+                logger.info(f"{name:<20} {idx:<10} {counts[idx]:<10}")
 
     def _compute_dataset_balance(self) -> None:
-        """Compute dataset balance for the specified sensitive feature."""
-        group_counts = np.bincount(self.sensitive_feature)
-        self.dataset_balance = group_counts.min() / group_counts.max()
+        """Compute dataset balance for each sensitive feature."""
+        self.dataset_balance = np.zeros(self.sensitive_features.shape[1])
+        for m in range(self.sensitive_features.shape[1]):
+            group_counts = np.bincount(self.sensitive_features[:, m])
+            self.dataset_balance[m] = group_counts.min() / group_counts.max()
 
     def _convert_to_arrays(self) -> None:
         """Convert to numpy arrays and optimize memory."""
         if not isinstance(self.X, np.ndarray):
             self.X = self.X.to_numpy()
         self.X = self.X.astype(np.float32)
-        self.sensitive_feature = self.sensitive_feature.astype(np.int8)
+        self.sensitive_features = self.sensitive_features.astype(np.int8)
 
     def _scale_features(self) -> None:
         """Apply non-sensitive feature scaling."""
@@ -288,7 +306,7 @@ class DataPreprocessor:
         start_time = time.perf_counter()
         self.batch_X, self.batch_map, self.batch_weights = create_batches(
             X=self.X,
-            sensitive_feature=self.sensitive_feature,
+            sensitive_features=self.sensitive_features,
             n_batches=self.n_batches,
             seed=42,
         )
@@ -296,8 +314,8 @@ class DataPreprocessor:
 
     def _save_preprocessed_dataset(self) -> None:
         """Save preprocessed dataset to CSV."""
-        combined_data = np.column_stack([self.X, self.sensitive_feature])
-        columns = self.features + [self.sensitive_name]
+        combined_data = np.column_stack([self.X, self.sensitive_features])
+        columns = self.features + self.sensitive_names
         output_path = f"data/{self.dataset}_processed.csv"
         pd.DataFrame(combined_data, columns=columns).to_csv(
             output_path, index=False
