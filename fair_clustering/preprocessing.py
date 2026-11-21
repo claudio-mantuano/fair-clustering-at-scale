@@ -56,10 +56,13 @@ def create_batches(
     if sensitive_features.ndim == 1:
         sensitive_features = sensitive_features.reshape(-1, 1)
 
-    model = faiss.Kmeans(d=n_features, k=n_batches, niter=10, seed=seed)
+    model = faiss.Kmeans(d=n_features, k=n_batches, seed=seed)
     model.train(X)
     _, labels = model.index.search(X, 1)
     labels = labels.flatten()
+    # FAISS centers are computed on a subsample of the dataset
+    # Representatives are recomputed as exact batch centers
+    centers = pd.DataFrame(X).groupby(labels).mean().to_numpy()
 
     weights = []
     for m in range(sensitive_features.shape[1]):
@@ -68,7 +71,7 @@ def create_batches(
         np.add.at(feature_weights, (labels, sensitive_features[:, m]), 1)
         weights.append(feature_weights)
 
-    return model.centroids, labels, weights
+    return centers, labels, weights
 
 
 @dataclass
