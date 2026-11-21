@@ -127,11 +127,15 @@ class MILPBasedHeuristic:
                 centers, update_runtime = self._update_centers(
                     X=X, labels=labels, n_clusters=self.n_clusters
                 )
+                cost = self._get_cost(X=X, centers=centers, labels=labels)
             elif self.algorithm == "smpfc":
                 centers, update_runtime = self._update_centers_weighted(
                     X=X, labels=labels, n_clusters=self.n_clusters
                 )
-            cost = self._get_cost(X=X, centers=centers, labels=labels)
+                # Cost of representatives weighted by batch size
+                batch_sizes = self.batch_weights[0].sum(axis=1)
+                distances = ((X - centers[labels]) ** 2).sum(axis=1)
+                cost = (batch_sizes * distances).sum()
 
             # Check stopping criteria
             if np.isinf(best_cost):
@@ -205,6 +209,10 @@ class MILPBasedHeuristic:
         )
         clusters = range(self.n_clusters)
         distances = self._compute_distance_matrix(X=X, centers=centers)
+        if self.algorithm == "smpfc":
+            # Representative-to-center distances weighted by batch size
+            batch_sizes = self.batch_weights[0].sum(axis=1)
+            distances = distances * batch_sizes[:, None]
         distances_dict = {
             (i, j): distances[i, j] for i in objects for j in clusters
         }
@@ -260,7 +268,8 @@ class MILPBasedHeuristic:
         Parameters
         ----------
         distances : dict
-            {(i,j): distance from object i to cluster center j}.
+            {(i,j): distance from object i to cluster center j}, weighted by
+            batch size for S-MPFC.
         initial_labels : np.ndarray
             Cluster assignments from previous iteration (used for warm start).
         solver_time_limit : float
@@ -349,7 +358,8 @@ class MILPBasedHeuristic:
         Parameters
         ----------
         distances : dict
-            {(i,j): distance from object i to cluster center j}.
+            {(i,j): distance from object i to cluster center j}, weighted by
+            batch size for S-MPFC.
         initial_labels : np.ndarray
             Cluster assignments from previous iteration (used for warm start).
         solver_time_limit : float
