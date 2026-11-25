@@ -58,9 +58,29 @@ def create_batches(
 
     model = faiss.Kmeans(d=n_features, k=n_batches, seed=seed)
     model.train(X)
-    _, labels = model.index.search(X, 1)
+    distances, labels = model.index.search(X, 1)
+    distances = distances.flatten()
     labels = labels.flatten()
-    # FAISS centers are computed on a subsample of the dataset
+
+    # Empty batches are filled with the objects farthest from their batch center
+    batch_sizes = np.bincount(labels, minlength=n_batches)
+    empty_batches = list(np.flatnonzero(batch_sizes == 0))
+    if empty_batches:
+        # Find farthest objects from their assigned batch center
+        farthest_objects = np.argpartition(
+            -distances, n_batches - 1
+        )[:n_batches]
+        farthest_objects = farthest_objects[
+            np.argsort(-distances[farthest_objects])
+        ]
+        for obj in farthest_objects:
+            if not empty_batches:
+                break
+            # The last object left in a batch is not moved
+            if batch_sizes[labels[obj]] > 1:
+                batch_sizes[labels[obj]] -= 1
+                labels[obj] = empty_batches.pop()
+
     # Representatives are recomputed as exact batch centers
     centers = pd.DataFrame(X).groupby(labels).mean().to_numpy()
 
