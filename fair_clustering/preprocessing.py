@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
-def create_batches(
+def construct_batches(
     X: np.ndarray,
     sensitive_features: np.ndarray,
     n_batches: int,
@@ -174,7 +174,7 @@ class DataPreprocessor:
         self._compute_dataset_balance()
         self._convert_to_arrays()
         self._scale_features()
-        self._create_batches()
+        self._construct_batches()
         self._save_preprocessed_dataset()
 
     def _download_dataset(self) -> None:
@@ -327,7 +327,7 @@ class DataPreprocessor:
         elif self.standardize:
             self.X = preprocessing.StandardScaler().fit_transform(self.X)
 
-    def _create_batches(self) -> None:
+    def _construct_batches(self) -> None:
         """Construct batches for S-MPFC using FAISS k-means."""
         if self.n_batches is None:
             self.batch_X = None
@@ -337,7 +337,7 @@ class DataPreprocessor:
             return
 
         start_time = time.perf_counter()
-        self.batch_X, self.batch_map, self.batch_weights = create_batches(
+        self.batch_X, self.batch_map, self.batch_weights = construct_batches(
             X=self.X,
             sensitive_features=self.sensitive_features,
             n_batches=self.n_batches,

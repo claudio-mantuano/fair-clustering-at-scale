@@ -62,7 +62,7 @@ class MILPBasedHeuristic:
         ):
             raise ValueError(
                 "S-MPFC requires `batch_X`, `batch_map`, and `batch_weights`. "
-                "Use `create_batches` from `fair_clustering.preprocessing` to construct them."
+                "Use `construct_batches` from `fair_clustering.preprocessing` to construct them."
             )
 
     def _backmap(self, batch_labels: np.ndarray) -> None:

@@ -71,16 +71,16 @@ fc.fit(X, sensitive_feature)
 
 print(f"Cost: {fc.cost_:.2f}")
 print(f"Balance: {np.round(fc.balance_, 2)}")
-print(f"Runtime: {fc.runtime_:.2f}s")
+print(f"Runtime: {fc.total_runtime_:.2f}s")
 ```
 
-S-MPFC additionally requires three batch-related parameters (`batch_X`, `batch_map`, `batch_weights`), passed to `.fit()`, which can be constructed using the `create_batches` helper function from `fair_clustering.preprocessing`.
+S-MPFC additionally requires three batch-related parameters (`batch_X`, `batch_map`, `batch_weights`), passed to `.fit()`, which can be constructed using the `construct_batches` helper function from `fair_clustering.preprocessing`.
 
 ```python
 from fair_clustering.base import FairClustering
-from fair_clustering.preprocessing import create_batches
+from fair_clustering.preprocessing import construct_batches
 
-batch_X, batch_map, batch_weights = create_batches(
+batch_X, batch_map, batch_weights = construct_batches(
     X, sensitive_feature, n_batches=500
 )
 
@@ -111,7 +111,7 @@ fc.fit(
 > Free academic licenses are available for [Gurobi](https://www.gurobi.com/academia/academic-program-and-licenses/) and [Hexaly](https://www.hexaly.com/pricing).
 
 > [!NOTE]
-> Datasets with multiple sensitive features are supported by `mpfc`, `smpfc`, `miqcp`, and `setvars`, while `msflowfc` supports only a single sensitive feature. Pass the sensitive features to `.fit()` and `create_batches` as an array of shape `(n_objects, n_sensitive_features)`; a 1D array, as in the examples above, is treated as a single sensitive feature.
+> Datasets with multiple sensitive features are supported by `mpfc`, `smpfc`, `miqcp`, and `setvars`, while `msflowfc` supports only a single sensitive feature. Pass the sensitive features to `.fit()` and `construct_batches` as an array of shape `(n_objects, n_sensitive_features)`; a 1D array, as in the examples above, is treated as a single sensitive feature.
 
 ## Run experiments
 
